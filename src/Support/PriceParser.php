@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace X402\Laravel\Support;
 
+use InvalidArgumentException;
+
 /**
  * Convert human-readable decimal amounts (e.g. "0.01") into atomic-unit
  * strings (e.g. "10000" for USDC's 6 decimals).
@@ -15,8 +17,8 @@ final class PriceParser
 {
     public static function toAtomic(string $amount, int $decimals): string
     {
-        if (! preg_match('/^\d+(\.\d+)?$/', $amount)) {
-            throw new \InvalidArgumentException(sprintf('Invalid decimal amount "%s".', $amount));
+        if (preg_match('/^\d+(\.\d+)?$/', $amount) !== 1) {
+            throw new InvalidArgumentException(sprintf('Invalid decimal amount "%s".', $amount));
         }
 
         [$whole, $frac] = str_contains($amount, '.')
@@ -24,7 +26,7 @@ final class PriceParser
             : [$amount, ''];
 
         if (\strlen($frac) > $decimals) {
-            throw new \InvalidArgumentException(sprintf(
+            throw new InvalidArgumentException(sprintf(
                 'Amount "%s" has more decimals than asset supports (%d).',
                 $amount,
                 $decimals,
@@ -33,7 +35,7 @@ final class PriceParser
 
         $frac = str_pad($frac, $decimals, '0', STR_PAD_RIGHT);
 
-        $combined = ltrim($whole.$frac, '0');
+        $combined = ltrim($whole . $frac, '0');
 
         return $combined === '' ? '0' : $combined;
     }

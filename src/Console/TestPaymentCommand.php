@@ -15,18 +15,29 @@ final class TestPaymentCommand extends Command
 
     public function handle(): int
     {
-        $url = (string) $this->argument('url');
+        $urlRaw = $this->argument('url');
+        $url = is_string($urlRaw) ? $urlRaw : '';
 
-        $this->info('GET '.$url);
+        if (filter_var($url, FILTER_VALIDATE_URL) === false) {
+            $this->error('Invalid URL: ' . ($url === '' ? '(empty)' : $url));
+
+            return self::INVALID;
+        }
+
+        $this->info('GET ' . $url);
 
         $response = Http::withX402()->get($url);
 
-        $this->info('Status: '.$response->status());
+        $this->info('Status: ' . $response->status());
 
         if ($response->successful()) {
-            $receipt = $response->header('X-PAYMENT-RESPONSE') ?: $response->header('PAYMENT-RESPONSE');
+            $receipt = $response->header('X-PAYMENT-RESPONSE');
+            if ($receipt === '') {
+                $receipt = $response->header('PAYMENT-RESPONSE');
+            }
+
             if ($receipt !== '') {
-                $this->info('Settlement receipt: '.$receipt);
+                $this->info('Settlement receipt: ' . $receipt);
             }
 
             return self::SUCCESS;

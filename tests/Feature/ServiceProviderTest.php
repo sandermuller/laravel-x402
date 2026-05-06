@@ -9,8 +9,6 @@ use X402\Client\Wallet;
 use X402\Facilitator\FacilitatorClient;
 use X402\Replay\NonceStoreContract;
 
-uses(\X402\Laravel\Tests\TestCase::class);
-
 it('binds the FacilitatorClient as a singleton', function (): void {
     $a = $this->app->make(FacilitatorClient::class);
     $b = $this->app->make(FacilitatorClient::class);
@@ -27,9 +25,9 @@ it('resolves a Wallet from configured private key', function (): void {
 });
 
 it('throws when private key is missing', function (): void {
-    $this->app['config']->set('x402.wallet.private_key', '');
+    config()->set('x402.wallet.private_key', '');
 
-    $this->app->make(Wallet::class);
+    resolve(Wallet::class);
 })->throws(RuntimeException::class, 'X402_PRIVATE_KEY');
 
 it('registers the x402 route middleware alias', function (): void {

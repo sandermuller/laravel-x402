@@ -6,10 +6,14 @@ namespace X402\Laravel\Facades;
 
 use Illuminate\Support\Facades\Facade;
 use X402\Facilitator\FacilitatorClient;
+use X402\Facilitator\SettleResult;
+use X402\Facilitator\VerifyResult;
+use X402\Protocol\PaymentRequired;
+use X402\Protocol\PaymentSignature;
 
 /**
- * @method static \X402\Facilitator\VerifyResult verify(\X402\Protocol\PaymentSignature $signature, \X402\Protocol\PaymentRequired $challenge)
- * @method static \X402\Facilitator\SettleResult settle(\X402\Protocol\PaymentSignature $signature, \X402\Protocol\PaymentRequired $challenge)
+ * @method static VerifyResult verify(PaymentSignature $signature, PaymentRequired $challenge)
+ * @method static SettleResult settle(PaymentSignature $signature, PaymentRequired $challenge)
  */
 final class X402 extends Facade
 {

@@ -4,19 +4,26 @@ declare(strict_types=1);
 
 namespace X402\Laravel\Client;
 
+use Closure;
+use GuzzleHttp\Promise\PromiseInterface;
+use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Facades\Date;
+use JsonException;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use X402\Client\PrivateKeyWallet;
 use X402\Client\Wallet;
 use X402\Exceptions\X402Exception;
+use X402\Laravel\Support\ConfigReader;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\PaymentSignature;
 use X402\Protocol\Version;
 use X402\Schemes\Evm\AuthorizationSigner;
 use X402\Schemes\Evm\Eip712Hasher;
+use X402\Support\JsonReader;
 
 /**
  * Registers the `Http::withX402()` macro on Laravel's HTTP client factory.
@@ -36,7 +43,7 @@ final class HttpClientMacro
                 ? new PrivateKeyWallet($privateKey)
                 : $container->make(Wallet::class);
 
-            $version = Version::from((string) $container->make('config')->get('x402.version', 'v1'));
+            $version = Version::from(ConfigReader::string($container->make(Repository::class), 'x402.version', 'v1'));
 
             return self::guzzleMiddleware($wallet, $version);
         };
@@ -52,42 +59,51 @@ final class HttpClientMacro
     /**
      * Build the Guzzle handler-stack middleware closure.
      */
-    public static function guzzleMiddleware(Wallet $wallet, Version $version): \Closure
+    public static function guzzleMiddleware(Wallet $wallet, Version $version): Closure
     {
-        return static function (callable $next) use ($wallet, $version): \Closure {
-            return static function (RequestInterface $request, array $options) use ($next, $wallet, $version) {
-                /** @var \GuzzleHttp\Promise\PromiseInterface $promise */
-                $promise = $next($request, $options);
+        return static fn (callable $next): Closure => static function (RequestInterface $request, array $options) use ($next, $wallet, $version) {
+            /** @var PromiseInterface $promise */
+            $promise = $next($request, $options);
 
-                return $promise->then(static function (ResponseInterface $response) use ($next, $request, $options, $wallet, $version) {
-                    if ($response->getStatusCode() !== 402) {
-                        return $response;
-                    }
+            return $promise->then(static function (ResponseInterface $response) use ($next, $request, $options, $wallet, $version) {
+                if ($response->getStatusCode() !== 402) {
+                    return $response;
+                }
 
-                    $challenge = self::decodeChallenge($response, $version);
-                    $signed = self::sign($wallet, $challenge, $version);
+                // Version negotiation: server's wire trumps configured version.
+                $v2Header = Version::V2->challengeHeader();
+                $negotiated = $v2Header !== null && $response->hasHeader($v2Header)
+                    ? Version::V2
+                    : $version;
 
-                    $paid = $request->withHeader($version->signatureHeader(), $signed->toHeader());
+                $challenge = self::decodeChallenge($response, $negotiated);
+                $signed = self::sign($wallet, $challenge, $negotiated);
 
-                    return $next($paid, $options);
-                });
-            };
+                $paid = $request->withHeader($negotiated->signatureHeader(), $signed->toHeader());
+
+                return $next($paid, $options);
+            });
         };
     }
 
     private static function decodeChallenge(ResponseInterface $response, Version $version): PaymentRequired
     {
-        $headerLine = $response->getHeaderLine($version->challengeHeader());
+        // v2 puts the challenge in PAYMENT-REQUIRED header; v1 in the body.
+        $challengeHeader = $version->challengeHeader();
+        $headerLine = $challengeHeader !== null ? $response->getHeaderLine($challengeHeader) : '';
 
-        $body = $headerLine !== ''
-            ? (base64_decode($headerLine, true) ?: '')
-            : (string) $response->getBody();
+        if ($headerLine !== '') {
+            $decodedB64 = base64_decode($headerLine, true);
+            $body = $decodedB64 === false ? '' : $decodedB64;
+        } else {
+            $body = (string) $response->getBody();
+        }
 
         try {
             /** @var array<string, mixed> $decoded */
             $decoded = json_decode($body, true, flags: JSON_THROW_ON_ERROR);
-        } catch (\JsonException $e) {
-            throw new X402Exception('Could not decode 402 challenge: '.$e->getMessage(), previous: $e);
+        } catch (JsonException $jsonException) {
+            throw new X402Exception('Could not decode 402 challenge: ' . $jsonException->getMessage(), $jsonException->getCode(), previous: $jsonException);
         }
 
         $accepts = $decoded['accepts'] ?? [];
@@ -95,27 +111,36 @@ final class HttpClientMacro
             throw new X402Exception('402 response contained no challenges.');
         }
 
+        $firstRaw = $accepts[0] ?? null;
+        if (! is_array($firstRaw)) {
+            throw new X402Exception('402 challenge entry is not an object.');
+        }
+
         /** @var array<string, mixed> $first */
-        $first = $accepts[0];
+        $first = $firstRaw;
+
+        $amount = JsonReader::stringOrNull($first, 'amount')
+            ?? JsonReader::string($first, 'maxAmountRequired', '402 challenge');
 
         return new PaymentRequired(
-            scheme: (string) $first['scheme'],
-            network: (string) $first['network'],
-            maxAmountRequired: (string) $first['maxAmountRequired'],
-            asset: (string) $first['asset'],
-            payTo: (string) $first['payTo'],
-            maxTimeoutSeconds: isset($first['maxTimeoutSeconds']) ? (int) $first['maxTimeoutSeconds'] : 60,
-            extra: isset($first['extra']) && is_array($first['extra']) ? $first['extra'] : [],
+            scheme: JsonReader::string($first, 'scheme', '402 challenge'),
+            network: JsonReader::string($first, 'network', '402 challenge'),
+            amount: $amount,
+            asset: JsonReader::string($first, 'asset', '402 challenge'),
+            payTo: JsonReader::string($first, 'payTo', '402 challenge'),
+            maxTimeoutSeconds: JsonReader::int($first, 'maxTimeoutSeconds', default: 60),
+            extra: JsonReader::arrayOrEmpty($first, 'extra'),
         );
     }
 
     private static function sign(Wallet $wallet, PaymentRequired $challenge, Version $version): PaymentSignature
     {
-        $now = time();
+        $now = Date::now()
+            ->getTimestamp();
         $message = [
             'from' => $wallet->address(),
             'to' => $challenge->payTo,
-            'value' => $challenge->maxAmountRequired,
+            'value' => $challenge->amount,
             'validAfter' => $now - 5,
             'validBefore' => $now + $challenge->maxTimeoutSeconds,
             'nonce' => AuthorizationSigner::randomNonce(),
@@ -125,21 +150,24 @@ final class HttpClientMacro
             ? (int) substr($challenge->network, 7)
             : 0;
 
+        $extraName = $challenge->extra['name'] ?? '';
+        $extraVersion = $challenge->extra['version'] ?? '2';
+
         $domain = [
-            'name' => (string) ($challenge->extra['name'] ?? ''),
-            'version' => (string) ($challenge->extra['version'] ?? '2'),
+            'name' => is_string($extraName) ? $extraName : '',
+            'version' => is_string($extraVersion) ? $extraVersion : '2',
             'chainId' => $chainId,
             'verifyingContract' => $challenge->asset,
         ];
 
-        $digest = (new Eip712Hasher)->digest($domain, $message);
+        $digest = (new Eip712Hasher())->digest($domain, $message);
         $signature = $wallet->signDigest($digest);
 
         return new PaymentSignature(
             scheme: $challenge->scheme,
             network: $challenge->network,
             payload: ['signature' => $signature, 'authorization' => $message],
-            x402Version: $version === Version::V2 ? '2' : '1',
+            x402Version: $version->toInt(),
         );
     }
 }

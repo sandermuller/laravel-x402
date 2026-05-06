@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace X402\Laravel\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Config\Repository;
+use Throwable;
 use X402\Client\Wallet;
+use X402\Laravel\Support\ConfigReader;
 
 final class VerifyConfigCommand extends Command
 {
@@ -17,31 +20,31 @@ final class VerifyConfigCommand extends Command
     {
         $errors = [];
 
-        $config = $this->laravel->make('config');
+        $config = $this->laravel->make(Repository::class);
 
-        if (! $config->get('x402.recipient')) {
+        if (ConfigReader::string($config, 'x402.recipient') === '') {
             $errors[] = 'x402.recipient is empty (set X402_RECIPIENT).';
         }
 
-        if (! $config->get('x402.network')) {
+        if (ConfigReader::string($config, 'x402.network') === '') {
             $errors[] = 'x402.network is empty.';
         }
 
         $asset = $config->get('x402.asset');
-        if (! is_array($asset) || empty($asset['address'])) {
+        $address = is_array($asset) ? ($asset['address'] ?? null) : null;
+        if (! is_string($address) || $address === '') {
             $errors[] = 'x402.asset.address is empty.';
         }
 
-        if (! $config->get('x402.facilitator.url')) {
+        if (ConfigReader::string($config, 'x402.facilitator.url') === '') {
             $errors[] = 'x402.facilitator.url is empty.';
         }
 
         try {
-            /** @var Wallet $wallet */
             $wallet = $this->laravel->make(Wallet::class);
-            $this->info('Wallet address: '.$wallet->address());
-        } catch (\Throwable $e) {
-            $errors[] = 'Wallet resolution failed: '.$e->getMessage();
+            $this->info('Wallet address: ' . $wallet->address());
+        } catch (Throwable $throwable) {
+            $errors[] = 'Wallet resolution failed: ' . $throwable->getMessage();
         }
 
         if ($errors === []) {

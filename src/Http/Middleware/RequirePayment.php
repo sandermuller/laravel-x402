@@ -11,10 +11,12 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use RuntimeException;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use Symfony\Component\HttpFoundation\Response;
 use X402\Facilitator\FacilitatorClient;
+use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\PriceParser;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\Version;
@@ -37,32 +39,35 @@ use X402\Server\StaticPriceTable;
  *   - asset symbol (USDC by default — informational, asset address is from config)
  *   - network slug (base | base-sepolia | ethereum | polygon | arbitrum, or raw CAIP-2)
  */
-final class RequirePayment
+final readonly class RequirePayment
 {
     public function __construct(
-        private readonly FacilitatorClient $facilitator,
-        private readonly NonceStoreContract $nonceStore,
-        private readonly ConfigRepository $config,
-        private readonly Psr17Factory $psr17,
-        private readonly PsrHttpFactory $symfonyToPsr,
-        private readonly HttpFoundationFactory $psrToSymfony,
+        private FacilitatorClient $facilitator,
+        private NonceStoreContract $nonceStore,
+        private ConfigRepository $config,
+        private Psr17Factory $psr17,
+        private PsrHttpFactory $symfonyToPsr,
+        private HttpFoundationFactory $psrToSymfony,
     ) {}
 
     public function handle(Request $request, Closure $next, string $amount = '0', string $asset = 'USDC', string $networkSlug = 'base'): Response
     {
         $challenge = $this->buildChallenge($amount, $asset, $networkSlug, $request);
 
-        $priceTable = new StaticPriceTable;
-        $priceTable->set($request->path(), $challenge);
+        // PSR-7's UriInterface::getPath() always returns a leading slash; Laravel's
+        // Request::path() strips it. Normalise here so the StaticPriceTable lookup
+        // matches the resourceResolver's PSR-derived key.
+        $priceTable = new StaticPriceTable();
+        $priceTable->set('/' . ltrim($request->path(), '/'), $challenge);
 
         $enforcer = new PaymentEnforcer(
             priceTable: $priceTable,
             facilitator: $this->facilitator,
             nonceStore: $this->nonceStore,
-            schemes: ['exact' => new ExactScheme],
+            schemes: ['exact' => new ExactScheme()],
             responseFactory: $this->psr17,
             streamFactory: $this->psr17,
-            version: Version::from((string) $this->config->get('x402.version', 'v1')),
+            version: Version::from(ConfigReader::string($this->config, 'x402.version', 'v1')),
             resourceResolver: static fn (ServerRequestInterface $psr) => $psr->getUri()->getPath(),
         );
 
@@ -81,30 +86,39 @@ final class RequirePayment
         $assetConfig = $this->config->get('x402.asset');
 
         if (! is_array($assetConfig)) {
-            throw new \RuntimeException('x402.asset config is missing.');
+            throw new RuntimeException('x402.asset config is missing.');
         }
 
-        $atomic = PriceParser::toAtomic($amount, (int) ($assetConfig['decimals'] ?? 6));
+        $decimalsRaw = $assetConfig['decimals'] ?? 6;
+        $decimals = is_int($decimalsRaw) ? $decimalsRaw : 6;
+        $atomic = PriceParser::toAtomic($amount, $decimals);
 
-        $payTo = (string) $this->config->get('x402.recipient');
+        $payTo = ConfigReader::string($this->config, 'x402.recipient');
         if ($payTo === '') {
-            throw new \RuntimeException('x402.recipient is not configured. Set X402_RECIPIENT in your environment.');
+            throw new RuntimeException('x402.recipient is not configured. Set X402_RECIPIENT in your environment.');
         }
 
-        $eip712 = is_array($assetConfig['eip712'] ?? null) ? $assetConfig['eip712'] : [];
+        $address = $assetConfig['address'] ?? '';
+        $assetAddress = is_string($address) ? $address : '';
+
+        $eip712Raw = $assetConfig['eip712'] ?? [];
+        $eip712 = is_array($eip712Raw) ? $eip712Raw : [];
+
+        $name = $eip712['name'] ?? '';
+        $version = $eip712['version'] ?? '2';
 
         return new PaymentRequired(
             scheme: 'exact',
             network: $network,
-            maxAmountRequired: $atomic,
-            asset: (string) ($assetConfig['address'] ?? ''),
+            amount: $atomic,
+            asset: $assetAddress,
             payTo: $payTo,
-            maxTimeoutSeconds: (int) $this->config->get('x402.max_timeout_seconds', 60),
+            maxTimeoutSeconds: ConfigReader::int($this->config, 'x402.max_timeout_seconds', 60),
             resource: $request->fullUrl(),
-            description: $assetSymbol.' payment for '.$request->path(),
+            description: $assetSymbol . ' payment for ' . $request->path(),
             extra: [
-                'name' => (string) ($eip712['name'] ?? ''),
-                'version' => (string) ($eip712['version'] ?? '2'),
+                'name' => is_string($name) ? $name : '',
+                'version' => is_string($version) ? $version : '2',
             ],
         );
     }
@@ -125,12 +139,12 @@ final class RequirePayment
 /**
  * @internal
  */
-final class InnerHandler implements RequestHandlerInterface
+final readonly class InnerHandler implements RequestHandlerInterface
 {
     public function __construct(
-        private readonly Closure $next,
-        private readonly Request $original,
-        private readonly PsrHttpFactory $symfonyToPsr,
+        private Closure $next,
+        private Request $original,
+        private PsrHttpFactory $symfonyToPsr,
     ) {}
 
     public function handle(ServerRequestInterface $request): ResponseInterface

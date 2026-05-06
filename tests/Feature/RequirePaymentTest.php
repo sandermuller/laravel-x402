@@ -2,29 +2,32 @@
 
 declare(strict_types=1);
 
+use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Route;
+use X402\Facilitator\DiscoveryPage;
+use X402\Facilitator\DiscoveryQuery;
 use X402\Facilitator\FacilitatorClient;
 use X402\Facilitator\SettleResult;
+use X402\Facilitator\SupportedKinds;
 use X402\Facilitator\VerifyResult;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\PaymentSignature;
-
-uses(\X402\Laravel\Tests\TestCase::class);
 
 beforeEach(function (): void {
     Route::middleware('x402:0.01,USDC,base')->get('/premium', fn () => 'paid content');
 });
 
-it('returns 402 with a PAYMENT-REQUIRED challenge when no signature is sent', function (): void {
+it('returns 402 with a v1 challenge body when no signature is sent', function (): void {
     $response = $this->get('/premium');
 
-    expect($response->status())->toBe(402);
-    expect($response->headers->get('X-PAYMENT'))->not->toBeNull();
+    // v1 has no challenge header — body-only per spec.
+    expect($response->getStatusCode())->toBe(402)
+        ->and($response->headers->get('X-PAYMENT'))->toBeNull()
+        ->and((string) $response->getContent())->toContain('"x402Version":1');
 });
 
 it('passes through after a successful settlement', function (): void {
-    $this->app->instance(FacilitatorClient::class, new class implements FacilitatorClient
-    {
+    $this->app->instance(FacilitatorClient::class, new class implements FacilitatorClient {
         public function verify(PaymentSignature $signature, PaymentRequired $challenge): VerifyResult
         {
             return new VerifyResult(true, null, '0xpayer');
@@ -33,6 +36,16 @@ it('passes through after a successful settlement', function (): void {
         public function settle(PaymentSignature $signature, PaymentRequired $challenge): SettleResult
         {
             return new SettleResult(true, '0xtxhash', $challenge->network, '0xpayer');
+        }
+
+        public function supported(): SupportedKinds
+        {
+            return new SupportedKinds(kinds: []);
+        }
+
+        public function discoverResources(DiscoveryQuery $query = new DiscoveryQuery()): DiscoveryPage
+        {
+            return new DiscoveryPage(items: [], limit: $query->limit, offset: $query->offset, total: 0);
         }
     });
 
@@ -43,18 +56,21 @@ it('passes through after a successful settlement', function (): void {
             'signature' => '0xdeadbeef',
             'authorization' => [
                 'from' => '0xfrom',
-                'to' => $this->app['config']->get('x402.recipient'),
+                'to' => config('x402.recipient'),
                 'value' => '10000',
-                'validAfter' => time() - 10,
-                'validBefore' => time() + 60,
-                'nonce' => '0x'.bin2hex(random_bytes(32)),
+                'validAfter' => Date::now()
+                    ->getTimestamp() - 10,
+                'validBefore' => Date::now()
+                    ->getTimestamp() + 60,
+                'nonce' => '0x' . bin2hex(random_bytes(32)),
             ],
         ],
     ]));
 
     $response = $this->withHeader('X-PAYMENT', $signature)->get('/premium');
 
-    expect($response->status())->toBe(200);
-    expect($response->getContent())->toBe('paid content');
-    expect($response->headers->get('X-PAYMENT-RESPONSE'))->not->toBeNull();
+    expect($response->getStatusCode())->toBe(200)
+        ->and($response->getContent())
+        ->toBe('paid content')
+        ->and($response->headers->get('X-PAYMENT-RESPONSE'))->not->toBeNull();
 });

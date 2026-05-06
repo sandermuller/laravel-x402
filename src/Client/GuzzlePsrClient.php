@@ -15,9 +15,9 @@ use Psr\Http\Message\ResponseInterface;
  * it for a different transport (e.g. Symfony HttpClient) without rebinding
  * Guzzle itself.
  */
-final class GuzzlePsrClient implements ClientInterface
+final readonly class GuzzlePsrClient implements ClientInterface
 {
-    public function __construct(private readonly Client $client = new Client) {}
+    public function __construct(private Client $client = new Client()) {}
 
     public function sendRequest(RequestInterface $request): ResponseInterface
     {

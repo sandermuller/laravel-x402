@@ -1,0 +1,36 @@
+# Glob patterns lpv expects to be export-ignored. Mirrors .gitattributes
+# (the source of truth) — lpv reads this to validate `git archive HEAD`.
+#
+# Curated to differ from lpv's PHP preset on three OSS-norm exceptions:
+# LICENSE, README.md, and SECURITY.md SHIP in the dist so adopters reading
+# `vendor/sandermuller/laravel-x402/` directly see them.
+#
+# Update both this file AND .gitattributes when adding new dev artifacts.
+
+.agents
+.ai
+.cache
+.claude
+.editorconfig
+.github
+.gitattributes
+.gitignore
+.idea
+.lpv
+.mcp.json
+.phpstan
+.phpunit.cache
+AGENTS.md
+CHANGELOG.md
+CLAUDE.md
+composer.lock
+internal
+phpstan-baseline.neon
+phpstan.neon.dist
+phpunit.xml
+phpunit.xml.dist
+pint.json
+rector.php
+testbench.yaml
+tests
+workbench

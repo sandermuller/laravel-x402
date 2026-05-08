@@ -51,6 +51,7 @@
         "rector/type-perfect": "^2.1",
         "sandermuller/package-boost": "^0.12",
         "spaze/phpstan-disallowed-calls": "^4.10",
+        "stolt/lean-package-validator": "^5.7.1",
         "symplify/phpstan-extensions": "^12.0",
         "tomasvotruba/cognitive-complexity": "^1.1",
         "tomasvotruba/type-coverage": "^2.1"
@@ -93,6 +94,7 @@
         "test": "vendor/bin/pest",
         "test-coverage": "vendor/bin/pest --coverage",
         "sync-ai": "vendor/bin/testbench package-boost:sync",
+        "lean-dist": "vendor/bin/lean-package-validator validate --validate-git-archive",
         "qa": [
             "@rector",
             "@format",

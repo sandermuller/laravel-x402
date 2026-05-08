@@ -1,0 +1,43 @@
+name: lean-dist
+
+on:
+  pull_request:
+    paths:
+      - '.gitattributes'
+      - '.lpv'
+      - '.github/workflows/lean-dist.yml'
+      - 'composer.json'
+  push:
+    branches: [main]
+    paths:
+      - '.gitattributes'
+      - '.lpv'
+      - '.github/workflows/lean-dist.yml'
+      - 'composer.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lean-dist-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lean-dist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Validate dist tarball is lean
+        run: composer lean-dist

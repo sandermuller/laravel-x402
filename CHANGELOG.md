@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 - 2026-05-08
+
+Tracks `sandermuller/php-x402` `^0.2`. Adds a `MiddlewareSpec` registry so `::using()` and the string alias `x402:…` resolve through the same path, a `FakeFacilitator` testing seam reachable via `X402::fake()`, an `OutboundPaymentSent` event, and two new console commands (`x402:install`, `x402:list-routes`). Tests pass on the CI matrix.
+
+### What's new
+
+- **`MiddlewareSpec` + `MiddlewareSpecRegistry`** — `RequirePayment::using()` and `RequirePaymentFromBots::using()` now return a `Stringable` spec backed by a per-request registry. The chainable overrides (`->payTo()`, `->onNetwork()`, `->describing()`, `->skipWhen()`, …) attach to the spec, and the named middleware alias resolves the same spec for the string form (`->middleware('x402:0.01,USDC,base')`). Object and string registrations now agree on overrides instead of diverging.
+- **`X402::fake()`** — facade method swaps the bound `FacilitatorClient` for a `X402\Laravel\Testing\FakeFacilitator` that records calls and lets tests script outcomes (`assertSettled('https://localhost/premium')`, `rejectVerify('insufficient-funds')`, `failSettle('on-chain-revert')`). Laravel `Event::fake()` works alongside — the same `PaymentSettled` / `PaymentRejected` events still dispatch.
+- **`DispatchingFacilitator`** — internal decorator that fires the existing inbound events plus a new `X402\Laravel\Events\OutboundPaymentSent` whenever `Http::withX402()` countersigns a 402 challenge and retries. Listeners can record outbound spend, alert on failures, or hand work off to a queue.
+- **`x402:install` console command** — publishes `config/x402.php` and appends `X402_RECIPIENT` (and optionally `X402_PRIVATE_KEY`) to `.env`. Idempotent; existing values are never overwritten.
+- **`x402:list-routes` console command** — tabulates every route guarded by `RequirePayment` / `RequirePaymentFromBots` with its amount, network, asset, and per-route overrides. Useful for auditing pricing across a large route file.
+- **`x402:verify-config --ping`** — extends the existing config validator with a live probe of the configured facilitator URL using the configured auth headers.
+- **`WalletResolver` / `ConfiguredWalletResolver`** — the buyer-wallet lookup is now a swappable contract instead of an inline closure. Adopters with KMS / HD-wallet flows can bind their own resolver without subclassing the macro.
+
+### Notes
+
+- **Requires `sandermuller/php-x402` `^0.2`.** No public-API breaks in `laravel-x402` itself — the upstream `PaymentEnforcer::default()` → `forTesting()` rename lives behind the service provider, and the new `ResourceResolver` / `EnforcementPolicy` core interfaces are wired automatically.
+- Pre-1.0 minor: public API may still shift before `v1.0`. The `MiddlewareSpec` shape is stabilising but not frozen.
+- `package-boost` dev-dep bumped to `^0.14`. `boost:update` artisan alias is gone — scripts should call `vendor/bin/testbench package-boost:sync` instead.
+
+**Full Changelog**: https://github.com/SanderMuller/laravel-x402/compare/0.1.0...0.2.0
+
 ## [0.1.0] - 2026-05-08
 
 First release. Laravel adapter for the [x402 payment protocol](https://www.x402.org/) — gate routes behind HTTP 402 stablecoin payments per request, vary the price per resource, charge AI agents while keeping content free for humans, or pay outbound API calls automatically. Built on top of [`sandermuller/php-x402`](https://github.com/sandermuller/php-x402) `^0.1`.

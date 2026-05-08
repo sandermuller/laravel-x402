@@ -29,6 +29,7 @@ use X402\Facilitator\CoinbaseFacilitator;
 use X402\Facilitator\FacilitatorClient;
 use X402\Facilitator\SettleResult;
 use X402\Laravel\Cache\LaravelNonceStore;
+use X402\Laravel\Cache\LaravelPsr16Bridge;
 use X402\Laravel\Client\ConfiguredWalletResolver;
 use X402\Laravel\Client\GuzzlePsrClient;
 use X402\Laravel\Client\HttpClientMacro;
@@ -39,11 +40,15 @@ use X402\Laravel\Console\TestPaymentCommand;
 use X402\Laravel\Console\VerifyConfigCommand;
 use X402\Laravel\Detection\BotDetector;
 use X402\Laravel\Facilitator\DispatchingFacilitator;
+use X402\Laravel\Http\Middleware\CachePaymentResponse;
+use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
+use X402\Protocol\Version;
 use X402\Replay\NonceStoreContract;
+use X402\Server\PaymentResponseCache;
 
 final class X402ServiceProvider extends ServiceProvider
 {
@@ -80,6 +85,27 @@ final class X402ServiceProvider extends ServiceProvider
             return new LaravelNonceStore(
                 $cache,
                 ConfigReader::string($config, 'x402.replay.prefix', 'x402:nonce:'),
+            );
+        });
+
+        $this->app->singleton(PaymentResponseCache::class, function (Application $app): PaymentResponseCache {
+            $config = $app->make(Repository::class);
+            $store = ConfigReader::stringOrNull($config, 'x402.response_cache.cache_store');
+            $cache = $app->make(CacheRepository::class);
+
+            if ($store !== null && $store !== '') {
+                $cache = $app->make(Factory::class)->store($store);
+            }
+
+            $psr17 = $app->make(Psr17Factory::class);
+
+            return new PaymentResponseCache(
+                cache: new LaravelPsr16Bridge($cache),
+                responseFactory: $psr17,
+                streamFactory: $psr17,
+                version: Version::from(ConfigReader::string($config, 'x402.version', 'v1')),
+                ttl: ConfigReader::int($config, 'x402.response_cache.ttl', 3600),
+                prefix: ConfigReader::string($config, 'x402.response_cache.prefix', 'x402:idem:'),
             );
         });
 
@@ -143,6 +169,7 @@ final class X402ServiceProvider extends ServiceProvider
         $router = $this->app->make(Router::class);
         $router->aliasMiddleware('x402', RequirePayment::class);
         $router->aliasMiddleware('x402.bots', RequirePaymentFromBots::class);
+        $router->aliasMiddleware('x402.cache', CachePaymentResponse::class);
 
         $http = $this->app->make(HttpFactory::class);
         HttpClientMacro::register($http, $this->app);
@@ -186,10 +213,15 @@ final class X402ServiceProvider extends ServiceProvider
     }
 
     /**
-     * If Laravel Octane is installed, snapshot the EnforcementPolicy predicate
-     * after boot and restore it on every request — so accidental controller-
-     * level mutation of the singleton (warned about in README) does not bleed
-     * into the next request in long-lived workers.
+     * If Laravel Octane is installed, restore long-lived process state on
+     * every request so it does not bleed across workers:
+     *
+     *   - {@see EnforcementPolicy} predicate snapshot/restore (the singleton
+     *     is warned about in README — controllers occasionally call
+     *     `enforceWhen()` mid-request).
+     *   - {@see MiddlewareSpecRegistry::flush()} — `static $specs` is process-
+     *     global; `routes/web.php` rebuilds it on every Octane request, so
+     *     entries from earlier file loads accumulate without a flush.
      *
      * No-op if Octane isn't present. We listen via the framework Dispatcher
      * by FQCN so we don't need to require Octane as a dev dependency.
@@ -207,6 +239,7 @@ final class X402ServiceProvider extends ServiceProvider
 
         $events->listen('Laravel\\Octane\\Events\\RequestReceived', static function () use ($policy): void {
             $policy->restoreSnapshot();
+            MiddlewareSpecRegistry::flush();
         });
     }
 }

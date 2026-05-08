@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace X402\Laravel\Facilitator;
 
 use Illuminate\Contracts\Events\Dispatcher;
+use Throwable;
 use X402\Facilitator\DiscoveryPage;
 use X402\Facilitator\DiscoveryQuery;
 use X402\Facilitator\FacilitatorClient;
@@ -32,7 +33,16 @@ final readonly class DispatchingFacilitator implements FacilitatorClient
 
     public function verify(PaymentSignature $signature, PaymentRequired $challenge): VerifyResult
     {
-        $result = $this->inner->verify($signature, $challenge);
+        try {
+            $result = $this->inner->verify($signature, $challenge);
+        } catch (Throwable $throwable) {
+            $this->events->dispatch(new PaymentRejected(
+                reason: 'verify-error: ' . $throwable::class . ': ' . $throwable->getMessage(),
+                resource: $challenge->resource ?? '',
+            ));
+
+            throw $throwable;
+        }
 
         if (! $result->isValid) {
             $this->events->dispatch(new PaymentRejected(
@@ -46,7 +56,16 @@ final readonly class DispatchingFacilitator implements FacilitatorClient
 
     public function settle(PaymentSignature $signature, PaymentRequired $challenge): SettleResult
     {
-        $result = $this->inner->settle($signature, $challenge);
+        try {
+            $result = $this->inner->settle($signature, $challenge);
+        } catch (Throwable $throwable) {
+            $this->events->dispatch(new PaymentRejected(
+                reason: 'settle-error: ' . $throwable::class . ': ' . $throwable->getMessage(),
+                resource: $challenge->resource ?? '',
+            ));
+
+            throw $throwable;
+        }
 
         if ($result->success) {
             $this->events->dispatch(new PaymentSettled(

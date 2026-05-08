@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Route;
 use X402\Facilitator\FacilitatorClient;
+use X402\Laravel\Http\Middleware\MiddlewareSpec;
 use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Tests\Stubs\StubFacilitator;
@@ -28,7 +29,22 @@ it('serialises to a registry token when overrides are set', function (): void {
     expect($string)->toStartWith(RequirePayment::class . ':x402-spec-');
 
     $token = explode(':', $string, 2)[1];
-    expect(MiddlewareSpecRegistry::resolve($token))->toBe($spec);
+    expect(MiddlewareSpecRegistry::resolve($token))->toEqual($spec);
+});
+
+it('mutating a spec after registration does not affect the cached entry', function (): void {
+    $spec = RequirePayment::using('0.01')->payTo('0xroute');
+    $token = explode(':', (string) $spec, 2)[1];
+
+    $spec->payTo('0xother');
+
+    $resolved = MiddlewareSpecRegistry::resolve($token);
+
+    if (! $resolved instanceof MiddlewareSpec) {
+        throw new RuntimeException('expected resolved spec, got null');
+    }
+
+    expect($resolved->payTo)->toBe('0xroute');
 });
 
 it('uses the per-route payTo override when challenging', function (): void {

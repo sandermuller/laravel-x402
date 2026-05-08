@@ -137,6 +137,31 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Idempotency / response cache
+    |--------------------------------------------------------------------------
+    |
+    | The `x402.cache` middleware closes the "paid but didn't receive content"
+    | gap: if a client's connection drops between facilitator-settle and
+    | response-received, the same signed authorization can be retried — the
+    | prior 2xx response is replayed from cache instead of hitting the nonce
+    | store's replay guard and 402-ing the user who already paid.
+    |
+    | Apply per route, before the payment middleware:
+    |
+    |     Route::middleware(['x402.cache', RequirePayment::using('0.01')])
+    |
+    | TTL must comfortably exceed `replay` TTL so retries past nonce expiry
+    | still hit the cache.
+    */
+
+    'response_cache' => [
+        'cache_store' => env('X402_RESPONSE_CACHE_STORE', null), // null = default cache store
+        'ttl' => (int) env('X402_RESPONSE_CACHE_TTL', 3600),
+        'prefix' => 'x402:idem:',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Max payment timeout (seconds)
     |--------------------------------------------------------------------------
     */

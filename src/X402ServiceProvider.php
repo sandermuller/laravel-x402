@@ -58,6 +58,16 @@ final class X402ServiceProvider extends ServiceProvider
 
         $this->app->singleton(EnforcementPolicy::class, fn (): EnforcementPolicy => new EnforcementPolicy());
 
+        $this->registerPsrFactories();
+        $this->registerNonceStore();
+        $this->registerResponseCache();
+        $this->registerFacilitator();
+        $this->registerBotDetector();
+        $this->registerWallet();
+    }
+
+    private function registerPsrFactories(): void
+    {
         $this->app->singleton(Psr17Factory::class, fn () => new Psr17Factory());
 
         $this->app->bind(RequestFactoryInterface::class, fn (Application $app) => $app->make(Psr17Factory::class));
@@ -72,7 +82,10 @@ final class X402ServiceProvider extends ServiceProvider
         });
 
         $this->app->singleton(HttpFoundationFactory::class, fn () => new HttpFoundationFactory());
+    }
 
+    private function registerNonceStore(): void
+    {
         $this->app->bind(NonceStoreContract::class, function (Application $app): NonceStoreContract {
             $config = $app->make(Repository::class);
             $store = ConfigReader::stringOrNull($config, 'x402.replay.cache_store');
@@ -87,7 +100,10 @@ final class X402ServiceProvider extends ServiceProvider
                 ConfigReader::string($config, 'x402.replay.prefix', 'x402:nonce:'),
             );
         });
+    }
 
+    private function registerResponseCache(): void
+    {
         $this->app->singleton(PaymentResponseCache::class, function (Application $app): PaymentResponseCache {
             $config = $app->make(Repository::class);
             $store = ConfigReader::stringOrNull($config, 'x402.response_cache.cache_store');
@@ -108,7 +124,10 @@ final class X402ServiceProvider extends ServiceProvider
                 prefix: ConfigReader::string($config, 'x402.response_cache.prefix', 'x402:idem:'),
             );
         });
+    }
 
+    private function registerFacilitator(): void
+    {
         $this->app->singleton(CoinbaseFacilitator::class, function (Application $app): CoinbaseFacilitator {
             $config = $app->make(Repository::class);
 
@@ -129,8 +148,16 @@ final class X402ServiceProvider extends ServiceProvider
             inner: $app->make(CoinbaseFacilitator::class),
             events: $app->make(Dispatcher::class),
         ));
+    }
 
-        // Transient so per-request config overrides (e.g. per-tenant) are honoured under Octane.
+    /**
+     * Transient binding so per-request config overrides (e.g. per-tenant) are
+     * honoured under Octane. The static cache reuses an instance across
+     * requests with identical bot-pattern config, avoiding the (small)
+     * regex-array build on every request.
+     */
+    private function registerBotDetector(): void
+    {
         $this->app->bind(BotDetector::class, function (Application $app): BotDetector {
             /** @var array<string, BotDetector> $cache */
             static $cache = [];
@@ -146,7 +173,10 @@ final class X402ServiceProvider extends ServiceProvider
 
             return $cache[$key] ??= new BotDetector($patterns, $extra);
         });
+    }
 
+    private function registerWallet(): void
+    {
         $this->app->bind(Wallet::class, function (Application $app): Wallet {
             $key = ConfigReader::string($app->make(Repository::class), 'x402.wallet.private_key');
 

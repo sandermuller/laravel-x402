@@ -8,16 +8,13 @@ use Closure;
 use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use Illuminate\Http\Request;
 use Nyholm\Psr7\Factory\Psr17Factory;
-use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Server\RequestHandlerInterface;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use Symfony\Component\HttpFoundation\Response;
 use X402\Facilitator\FacilitatorClient;
-use X402\Laravel\Facades\X402;
 use X402\Laravel\Server\EloquentPriceTable;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
@@ -116,6 +113,17 @@ final readonly class RequirePayment
             }
         }
 
+        // Honour the global `X402::enforceWhen()` predicate before any PSR
+        // bridge / price-table / enforcer construction so a bypassed request
+        // pays no per-request allocation cost.
+        $globalPredicate = $this->policy->predicate();
+        if ($globalPredicate instanceof Closure && ! $globalPredicate($request)) {
+            /** @var Response $response */
+            $response = $next($request);
+
+            return $response;
+        }
+
         // PSR-7's UriInterface::getPath() always returns a leading slash; Laravel's
         // Request::path() strips it. Normalise here so the price-table lookup
         // matches the resourceResolver's PSR-derived key.
@@ -140,28 +148,18 @@ final readonly class RequirePayment
             streamFactory: $this->psr17,
             version: Version::from(ConfigReader::string($this->config, 'x402.version', 'v1')),
             resourceResolver: static fn (ServerRequestInterface $psr) => $psr->getUri()->getPath(),
-            shouldEnforce: $this->wrapPolicyForCore($request),
+            // Global EnforcementPolicy is checked above (line ~125); core slot stays null.
+            shouldEnforce: null,
             logger: $this->logger,
         );
 
         $psrRequest = $this->symfonyToPsr->createRequest($request);
 
-        $handler = new InnerHandler($next, $request, $this->symfonyToPsr);
+        $handler = new PsrInnerHandler($next, $request, $this->symfonyToPsr);
 
         $psrResponse = $enforcer->process($psrRequest, $handler);
 
         return $this->psrToSymfony->createResponse($psrResponse);
-    }
-
-    private function wrapPolicyForCore(Request $request): ?Closure
-    {
-        $predicate = $this->policy->predicate();
-
-        if (! $predicate instanceof Closure) {
-            return null;
-        }
-
-        return static fn (ServerRequestInterface $_psr): bool => $predicate($request);
     }
 
     private function buildChallenge(string $amount, string $assetSymbol, string $networkSlug, Request $request, ?MiddlewareSpec $spec = null): PaymentRequired
@@ -238,33 +236,23 @@ final readonly class RequirePayment
             throw new RuntimeException('x402.asset config is missing.');
         }
 
-        /** @var array<string, mixed> $default */
-        return $default;
-    }
-}
+        $defaultSymbol = is_string($default['symbol'] ?? null) ? $default['symbol'] : 'USDC';
 
-/**
- * @internal
- */
-final readonly class InnerHandler implements RequestHandlerInterface
-{
-    public function __construct(
-        private Closure $next,
-        private Request $original,
-        private PsrHttpFactory $symfonyToPsr,
-    ) {}
-
-    public function handle(ServerRequestInterface $request): ResponseInterface
-    {
-        $settle = $request->getAttribute('x402.settle');
-
-        if ($settle !== null) {
-            $this->original->attributes->set('x402_settle', $settle);
+        if ($symbol === $defaultSymbol) {
+            /** @var array<string, mixed> $default */
+            return $default;
         }
 
-        /** @var Response $symfonyResponse */
-        $symfonyResponse = ($this->next)($this->original);
+        $known = is_array($assets) ? array_keys($assets) : [];
+        if (! in_array($defaultSymbol, $known, true)) {
+            $known[] = $defaultSymbol;
+        }
 
-        return $this->symfonyToPsr->createResponse($symfonyResponse);
+        throw new RuntimeException(sprintf(
+            'Unknown x402 asset symbol "%s". Known symbols: %s. Add it under `x402.assets` or use the default ("%s").',
+            $symbol,
+            implode(', ', $known),
+            $defaultSymbol,
+        ));
     }
 }

@@ -88,17 +88,37 @@ it('resolves asset address+decimals from config map by symbol', function (): voi
     expect($body['accepts'][0]['asset'])->toBe('0x6c3ea9036406852006290770BEdFcAbA0e23A0e8');
 });
 
-it('falls back to the default asset block for unknown symbols', function (): void {
+it('rejects unknown asset symbols instead of silently using the default', function (): void {
     $this->app->instance(FacilitatorClient::class, new StubFacilitator());
 
     Route::middleware((string) RequirePayment::using('0.01', 'UNKNOWN'))
         ->get('/unknown', fn () => 'ok');
 
-    $response = $this->get('/unknown');
+    expect(fn () => $this->withoutExceptionHandling()->get('/unknown'))
+        ->toThrow(RuntimeException::class, 'Unknown x402 asset symbol "UNKNOWN"');
+});
+
+it('falls back to the default asset block when the configured default symbol is requested', function (): void {
+    $this->app->instance(FacilitatorClient::class, new StubFacilitator());
+
+    // Default symbol is USDC (config/x402.php), but the assets map only lists USDC under
+    // a different decimals/eip712 set. Configure a default with a non-overlapping symbol
+    // and request it explicitly — the fallback should fire.
+    config()->set('x402.asset', [
+        'address' => '0xdefault',
+        'symbol' => 'DEFAULTCOIN',
+        'decimals' => 6,
+        'eip712' => ['name' => 'Default', 'version' => '1'],
+    ]);
+
+    Route::middleware((string) RequirePayment::using('0.01', 'DEFAULTCOIN'))
+        ->get('/default', fn () => 'ok');
+
+    $response = $this->get('/default');
     $body = json_decode((string) $response->getContent(), true);
     expect($body)->toBeArray();
     /** @var array{accepts: list<array{asset: string}>} $body */
-    expect($body['accepts'][0]['asset'])->toBe(config('x402.asset.address'));
+    expect($body['accepts'][0]['asset'])->toBe('0xdefault');
 });
 
 it('dispatches OutboundPaymentSent when Http::withX402 retries with a signed payment', function (): void {

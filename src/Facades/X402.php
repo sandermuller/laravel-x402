@@ -45,7 +45,13 @@ final class X402 extends Facade
      */
     public static function enforceWhen(Closure $predicate): void
     {
-        self::getFacadeApplication()?->make(EnforcementPolicy::class)?->when($predicate);
+        $app = self::getFacadeApplication();
+
+        if ($app === null) {
+            throw new RuntimeException('X402::enforceWhen() requires a bound application instance.');
+        }
+
+        $app->make(EnforcementPolicy::class)->when($predicate);
     }
 
     /**

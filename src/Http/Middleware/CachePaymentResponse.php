@@ -6,9 +6,6 @@ namespace X402\Laravel\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use Psr\Http\Message\ResponseInterface;
-use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Server\RequestHandlerInterface;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use Symfony\Component\HttpFoundation\Response;
@@ -49,30 +46,10 @@ final readonly class CachePaymentResponse
     {
         $psrRequest = $this->symfonyToPsr->createRequest($request);
 
-        $handler = new CacheInnerHandler($next, $request, $this->symfonyToPsr);
+        $handler = new PsrInnerHandler($next, $request, $this->symfonyToPsr);
 
         $psrResponse = $this->cache->process($psrRequest, $handler);
 
         return $this->psrToSymfony->createResponse($psrResponse);
-    }
-}
-
-/**
- * @internal
- */
-final readonly class CacheInnerHandler implements RequestHandlerInterface
-{
-    public function __construct(
-        private Closure $next,
-        private Request $original,
-        private PsrHttpFactory $symfonyToPsr,
-    ) {}
-
-    public function handle(ServerRequestInterface $request): ResponseInterface
-    {
-        /** @var Response $symfonyResponse */
-        $symfonyResponse = ($this->next)($this->original);
-
-        return $this->symfonyToPsr->createResponse($symfonyResponse);
     }
 }

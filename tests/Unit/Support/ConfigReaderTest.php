@@ -58,3 +58,12 @@ it('returns empty array for missing or non-array values', function (): void {
         ->and(ConfigReader::array(repo(['x' => 'not array']), 'x'))
         ->toBeEmpty();
 });
+
+it('reads a list of strings, preserving null vs empty distinction', function (): void {
+    expect(ConfigReader::stringListOrNull(repo(), 'x'))->toBeNull()
+        ->and(ConfigReader::stringListOrNull(repo(['x' => 'scalar']), 'x'))->toBeNull()
+        ->and(ConfigReader::stringListOrNull(repo(['x' => []]), 'x'))
+        ->toBeEmpty()
+        ->and(ConfigReader::stringListOrNull(repo(['x' => ['a', 'b']]), 'x'))->toBe(['a', 'b'])
+        ->and(ConfigReader::stringListOrNull(repo(['x' => ['a', 1, null, 'b']]), 'x'))->toBe(['a', 'b']);
+});

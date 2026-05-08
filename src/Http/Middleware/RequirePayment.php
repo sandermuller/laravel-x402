@@ -16,28 +16,42 @@ use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use Symfony\Component\HttpFoundation\Response;
 use X402\Facilitator\FacilitatorClient;
+use X402\Laravel\Facades\X402;
+use X402\Laravel\Server\EloquentPriceTable;
 use X402\Laravel\Support\ConfigReader;
+use X402\Laravel\Support\EnforcementPolicy;
 use X402\Laravel\Support\PriceParser;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\Version;
 use X402\Replay\NonceStoreContract;
 use X402\Schemes\Evm\ExactScheme;
 use X402\Server\PaymentEnforcer;
-use X402\Server\StaticPriceTable;
 
 /**
  * Laravel route middleware adapter — wraps the framework-agnostic
  * PaymentEnforcer from php-x402.
  *
- * Usage:
+ * Usage (string syntax):
  *
  *   Route::get('/premium', PremiumController::class)
  *       ->middleware('x402:0.01,USDC,base');
+ *
+ * Usage (fluent syntax — preferred):
+ *
+ *   Route::get('/premium', PremiumController::class)
+ *       ->middleware(RequirePayment::using('0.01'));
  *
  * Middleware parameters:
  *   - amount       (decimal in human units, e.g. 0.01 USDC = "10000" atomic)
  *   - asset symbol (USDC by default — informational, asset address is from config)
  *   - network slug (base | base-sepolia | ethereum | polygon | arbitrum, or raw CAIP-2)
+ *
+ * Per-request behaviour:
+ *   - Bound route parameters implementing {@see Priceable} override the static
+ *     amount (first match wins).
+ *   - The {@see EnforcementPolicy} predicate (if registered via
+ *     {@see X402::enforceWhen()}) can short-circuit the
+ *     entire pipeline before any challenge / nonce / facilitator work.
  */
 final readonly class RequirePayment
 {
@@ -48,17 +62,34 @@ final readonly class RequirePayment
         private Psr17Factory $psr17,
         private PsrHttpFactory $symfonyToPsr,
         private HttpFoundationFactory $psrToSymfony,
+        private EnforcementPolicy $policy,
     ) {}
+
+    /**
+     * Type-safe entry point for `Route::middleware(...)` — mirrors Laravel's
+     * `Authenticate::using('api')` convention.
+     */
+    public static function using(string $amount, string $asset = 'USDC', string $network = 'base'): string
+    {
+        return self::class . ':' . $amount . ',' . $asset . ',' . $network;
+    }
 
     public function handle(Request $request, Closure $next, string $amount = '0', string $asset = 'USDC', string $networkSlug = 'base'): Response
     {
-        $challenge = $this->buildChallenge($amount, $asset, $networkSlug, $request);
-
         // PSR-7's UriInterface::getPath() always returns a leading slash; Laravel's
-        // Request::path() strips it. Normalise here so the StaticPriceTable lookup
+        // Request::path() strips it. Normalise here so the price-table lookup
         // matches the resourceResolver's PSR-derived key.
-        $priceTable = new StaticPriceTable();
-        $priceTable->set('/' . ltrim($request->path(), '/'), $challenge);
+        $resourcePath = '/' . ltrim($request->path(), '/');
+
+        /** @var array<string, mixed> $routeParameters */
+        $routeParameters = $request->route()?->parameters() ?? [];
+
+        $priceTable = new EloquentPriceTable(
+            routeParameters: $routeParameters,
+            expectedResource: $resourcePath,
+            challengeBuilder: fn (string $resolvedAmount): PaymentRequired => $this->buildChallenge($resolvedAmount, $asset, $networkSlug, $request),
+            fallbackAmount: $amount,
+        );
 
         $enforcer = new PaymentEnforcer(
             priceTable: $priceTable,
@@ -69,6 +100,7 @@ final readonly class RequirePayment
             streamFactory: $this->psr17,
             version: Version::from(ConfigReader::string($this->config, 'x402.version', 'v1')),
             resourceResolver: static fn (ServerRequestInterface $psr) => $psr->getUri()->getPath(),
+            shouldEnforce: $this->wrapPolicyForCore($request),
         );
 
         $psrRequest = $this->symfonyToPsr->createRequest($request);
@@ -78,6 +110,17 @@ final readonly class RequirePayment
         $psrResponse = $enforcer->process($psrRequest, $handler);
 
         return $this->psrToSymfony->createResponse($psrResponse);
+    }
+
+    private function wrapPolicyForCore(Request $request): ?Closure
+    {
+        $predicate = $this->policy->predicate();
+
+        if (! $predicate instanceof Closure) {
+            return null;
+        }
+
+        return static fn (ServerRequestInterface $_psr): bool => $predicate($request);
     }
 
     private function buildChallenge(string $amount, string $assetSymbol, string $networkSlug, Request $request): PaymentRequired

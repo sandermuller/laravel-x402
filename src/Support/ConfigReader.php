@@ -67,4 +67,22 @@ final class ConfigReader
         /** @var array<string, mixed> $value */
         return $value;
     }
+
+    /**
+     * Returns a list of strings from config, preserving the null-vs-empty
+     * distinction: `null` (key absent / non-array value) and `[]` (explicit
+     * empty list) are different signals callers may want to act on.
+     *
+     * @return ?list<string>
+     */
+    public static function stringListOrNull(Repository $config, string $key): ?array
+    {
+        $value = $config->get($key);
+
+        if (! is_array($value)) {
+            return null;
+        }
+
+        return array_values(array_filter($value, is_string(...)));
+    }
 }

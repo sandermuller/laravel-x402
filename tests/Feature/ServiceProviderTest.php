@@ -7,6 +7,7 @@ use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use X402\Client\Wallet;
 use X402\Facilitator\FacilitatorClient;
+use X402\Laravel\Detection\BotDetector;
 use X402\Replay\NonceStoreContract;
 
 it('binds the FacilitatorClient as a singleton', function (): void {
@@ -39,4 +40,17 @@ it('registers the x402 route middleware alias', function (): void {
 it('binds both PSR-HTTP bridge factories', function (): void {
     expect($this->app->make(PsrHttpFactory::class))->toBeInstanceOf(PsrHttpFactory::class)
         ->and($this->app->make(HttpFoundationFactory::class))->toBeInstanceOf(HttpFoundationFactory::class);
+});
+
+it('reuses the BotDetector while config is unchanged and rebuilds when it changes', function (): void {
+    $a = $this->app->make(BotDetector::class);
+    $b = $this->app->make(BotDetector::class);
+
+    expect($a)->toBe($b);
+
+    config()->set('x402.bots.extra_patterns', ['NewBot']);
+    $c = $this->app->make(BotDetector::class);
+
+    expect($c)->not->toBe($a)
+        ->and($c->isBot('NewBot/1.0'))->toBeTrue();
 });

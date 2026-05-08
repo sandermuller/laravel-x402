@@ -102,4 +102,23 @@ return [
 
     'max_timeout_seconds' => (int) env('X402_MAX_TIMEOUT', 60),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Bot detection (x402.bots middleware)
+    |--------------------------------------------------------------------------
+    |
+    | The `x402.bots` middleware charges only requests whose User-Agent
+    | matches a known AI agent / scraper pattern. Humans pass through free.
+    |
+    | - "patterns": full override of the built-in list. Leave null to use
+    |   the curated default (see X402\Laravel\Detection\BotDetector).
+    | - "extra_patterns": appended to the active list — useful for adding
+    |   one-off agents without redefining the entire set.
+    */
+
+    'bots' => [
+        'patterns' => null,
+        'extra_patterns' => [],
+    ],
+
 ];

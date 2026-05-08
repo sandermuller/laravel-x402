@@ -28,8 +28,11 @@ use X402\Laravel\Client\GuzzlePsrClient;
 use X402\Laravel\Client\HttpClientMacro;
 use X402\Laravel\Console\TestPaymentCommand;
 use X402\Laravel\Console\VerifyConfigCommand;
+use X402\Laravel\Detection\BotDetector;
 use X402\Laravel\Http\Middleware\RequirePayment;
+use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 use X402\Laravel\Support\ConfigReader;
+use X402\Laravel\Support\EnforcementPolicy;
 use X402\Replay\NonceStoreContract;
 
 final class X402ServiceProvider extends ServiceProvider
@@ -37,6 +40,8 @@ final class X402ServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__ . '/../config/x402.php', 'x402');
+
+        $this->app->singleton(EnforcementPolicy::class, fn (): EnforcementPolicy => new EnforcementPolicy());
 
         $this->app->singleton(Psr17Factory::class, fn () => new Psr17Factory());
 
@@ -84,6 +89,20 @@ final class X402ServiceProvider extends ServiceProvider
             );
         });
 
+        // Transient so per-request config overrides (e.g. per-tenant) are honoured under Octane.
+        $this->app->bind(BotDetector::class, function (Application $app): BotDetector {
+            /** @var array<string, BotDetector> $cache */
+            static $cache = [];
+
+            $config = $app->make(Repository::class);
+            $patterns = ConfigReader::stringListOrNull($config, 'x402.bots.patterns');
+            $extra = ConfigReader::stringListOrNull($config, 'x402.bots.extra_patterns') ?? [];
+
+            $key = serialize([$patterns, $extra]);
+
+            return $cache[$key] ??= new BotDetector($patterns, $extra);
+        });
+
         $this->app->bind(Wallet::class, function (Application $app): Wallet {
             $key = ConfigReader::string($app->make(Repository::class), 'x402.wallet.private_key');
 
@@ -103,6 +122,7 @@ final class X402ServiceProvider extends ServiceProvider
 
         $router = $this->app->make(Router::class);
         $router->aliasMiddleware('x402', RequirePayment::class);
+        $router->aliasMiddleware('x402.bots', RequirePaymentFromBots::class);
 
         $http = $this->app->make(HttpFactory::class);
         HttpClientMacro::register($http, $this->app);

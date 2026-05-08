@@ -4,14 +4,8 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Route;
-use X402\Facilitator\DiscoveryPage;
-use X402\Facilitator\DiscoveryQuery;
 use X402\Facilitator\FacilitatorClient;
-use X402\Facilitator\SettleResult;
-use X402\Facilitator\SupportedKinds;
-use X402\Facilitator\VerifyResult;
-use X402\Protocol\PaymentRequired;
-use X402\Protocol\PaymentSignature;
+use X402\Laravel\Tests\Stubs\StubFacilitator;
 
 beforeEach(function (): void {
     Route::middleware('x402:0.01,USDC,base')->get('/premium', fn () => 'paid content');
@@ -27,27 +21,7 @@ it('returns 402 with a v1 challenge body when no signature is sent', function ()
 });
 
 it('passes through after a successful settlement', function (): void {
-    $this->app->instance(FacilitatorClient::class, new class implements FacilitatorClient {
-        public function verify(PaymentSignature $signature, PaymentRequired $challenge): VerifyResult
-        {
-            return new VerifyResult(true, null, '0xpayer');
-        }
-
-        public function settle(PaymentSignature $signature, PaymentRequired $challenge): SettleResult
-        {
-            return new SettleResult(true, '0xtxhash', $challenge->network, '0xpayer');
-        }
-
-        public function supported(): SupportedKinds
-        {
-            return new SupportedKinds(kinds: []);
-        }
-
-        public function discoverResources(DiscoveryQuery $query = new DiscoveryQuery()): DiscoveryPage
-        {
-            return new DiscoveryPage(items: [], limit: $query->limit, offset: $query->offset, total: 0);
-        }
-    });
+    $this->app->instance(FacilitatorClient::class, new StubFacilitator());
 
     $signature = base64_encode((string) json_encode([
         'scheme' => 'exact',

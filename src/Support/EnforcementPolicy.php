@@ -43,6 +43,14 @@ final class EnforcementPolicy
     private ?Closure $predicate = null;
 
     /**
+     * Snapshot of the boot-time predicate, used by the Octane integration to
+     * restore the original predicate between requests in long-lived workers.
+     *
+     * @var ?Closure(Request): bool
+     */
+    private ?Closure $snapshot = null;
+
+    /**
      * @param  Closure(Request): bool  $predicate  Returns true to enforce, false to skip.
      */
     public function when(Closure $predicate): void
@@ -61,5 +69,15 @@ final class EnforcementPolicy
     public function predicate(): ?Closure
     {
         return $this->predicate;
+    }
+
+    public function snapshot(): void
+    {
+        $this->snapshot = $this->predicate;
+    }
+
+    public function restoreSnapshot(): void
+    {
+        $this->predicate = $this->snapshot;
     }
 }

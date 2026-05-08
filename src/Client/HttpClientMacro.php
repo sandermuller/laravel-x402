@@ -8,6 +8,7 @@ use Closure;
 use GuzzleHttp\Promise\PromiseInterface;
 use Illuminate\Contracts\Config\Repository;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Date;
@@ -17,6 +18,7 @@ use Psr\Http\Message\ResponseInterface;
 use X402\Client\PrivateKeyWallet;
 use X402\Client\Wallet;
 use X402\Exceptions\X402Exception;
+use X402\Laravel\Events\OutboundPaymentSent;
 use X402\Laravel\Support\ConfigReader;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\PaymentSignature;
@@ -38,34 +40,35 @@ final class HttpClientMacro
 {
     public static function register(HttpFactory $http, Container $container): void
     {
-        $factory = static function (?string $privateKey = null) use ($container): callable {
+        $factory = static function (?string $privateKey = null, mixed $context = null) use ($container): callable {
             $wallet = $privateKey !== null
                 ? new PrivateKeyWallet($privateKey)
-                : $container->make(Wallet::class);
+                : $container->make(WalletResolver::class)->resolve($context);
 
             $version = Version::from(ConfigReader::string($container->make(Repository::class), 'x402.version', 'v1'));
+            $events = $container->make(Dispatcher::class);
 
-            return self::guzzleMiddleware($wallet, $version);
+            return self::guzzleMiddleware($wallet, $version, $events);
         };
 
-        $http::macro('withX402', function (?string $privateKey = null) use ($factory): PendingRequest {
+        $http::macro('withX402', function (?string $privateKey = null, mixed $context = null) use ($factory): PendingRequest {
             /** @var PendingRequest $self */
             $self = $this; // @phpstan-ignore-line — macro $this binding
 
-            return $self->withMiddleware($factory($privateKey));
+            return $self->withMiddleware($factory($privateKey, $context));
         });
     }
 
     /**
      * Build the Guzzle handler-stack middleware closure.
      */
-    public static function guzzleMiddleware(Wallet $wallet, Version $version): Closure
+    public static function guzzleMiddleware(Wallet $wallet, Version $version, ?Dispatcher $events = null): Closure
     {
-        return static fn (callable $next): Closure => static function (RequestInterface $request, array $options) use ($next, $wallet, $version) {
+        return static fn (callable $next): Closure => static function (RequestInterface $request, array $options) use ($next, $wallet, $version, $events) {
             /** @var PromiseInterface $promise */
             $promise = $next($request, $options);
 
-            return $promise->then(static function (ResponseInterface $response) use ($next, $request, $options, $wallet, $version) {
+            return $promise->then(static function (ResponseInterface $response) use ($next, $request, $options, $wallet, $version, $events) {
                 if ($response->getStatusCode() !== 402) {
                     return $response;
                 }
@@ -80,6 +83,14 @@ final class HttpClientMacro
                 $signed = self::sign($wallet, $challenge, $negotiated);
 
                 $paid = $request->withHeader($negotiated->signatureHeader(), $signed->toHeader());
+
+                $events?->dispatch(new OutboundPaymentSent(
+                    url: (string) $request->getUri(),
+                    amount: $challenge->amount,
+                    asset: $challenge->asset,
+                    network: $challenge->network,
+                    payTo: $challenge->payTo,
+                ));
 
                 return $next($paid, $options);
             });

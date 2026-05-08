@@ -36,7 +36,7 @@ it('returns 402 when an AI crawler is detected', function (): void {
 });
 
 it('routes through the fluent ::using() helper', function (): void {
-    Route::middleware(RequirePaymentFromBots::using('0.001'))->get('/fluent-article', fn () => 'free for humans');
+    Route::middleware((string) RequirePaymentFromBots::using('0.001'))->get('/fluent-article', fn () => 'free for humans');
 
     $bot = $this->withHeader('User-Agent', 'GPTBot/1.0')->get('/fluent-article');
     $human = $this->withHeader('User-Agent', 'Mozilla/5.0 Chrome/130.0')->get('/fluent-article');

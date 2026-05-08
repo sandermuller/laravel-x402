@@ -31,11 +31,18 @@ upstream APIs automatically via `Http::withX402()`.
 
 ```bash
 composer require sandermuller/laravel-x402
-php artisan vendor:publish --tag=x402-config
+php artisan x402:install
 ```
 
-The service provider is auto-discovered. Set the recipient address (and, for
-outbound calls, the buyer wallet's private key):
+`x402:install` publishes the config and prompts for the recipient address
+plus (optionally) a buyer wallet private key, appending them to `.env` if
+not already set. The service provider is auto-discovered.
+
+To run the steps manually:
+
+```bash
+php artisan vendor:publish --tag=x402-config
+```
 
 ```dotenv
 X402_RECIPIENT=0xYourReceivingAddress
@@ -53,9 +60,38 @@ Route::get('/premium', PremiumController::class)
     ->middleware(RequirePayment::using('0.01'));        // 0.01 USDC on Base
 ```
 
-The string form `->middleware('x402:0.01,USDC,base')` works too — the
-`::using()` static is a typed, refactor-safe alias matching Laravel's
-`Authenticate::using('api')` convention.
+`::using()` returns a chainable spec (Stringable). The string form
+`->middleware('x402:0.01,USDC,base')` works too — the named middleware
+alias is registered for both `x402` and `x402.bots`.
+
+### Per-route overrides — fluent builder
+
+```php
+Route::get('/premium', PremiumController::class)
+    ->middleware(
+        RequirePayment::using('0.01')
+            ->payTo('0xRouteSpecificRecipient')
+            ->onNetwork('polygon')
+            ->describing('Premium API call')
+            ->skipWhen(fn (Request $r) => $r->user()?->isPro() === true)
+    );
+```
+
+Available overrides:
+
+| Method | Effect |
+|---|---|
+| `->payTo($address)` | Override `x402.recipient` for this route. |
+| `->onNetwork($slug)` | `base`, `base-sepolia`, `ethereum`, `polygon`, `arbitrum`, or raw CAIP-2. |
+| `->asAsset($symbol)` | Display symbol in the challenge. |
+| `->describing($text)` | Custom challenge description (otherwise auto-generated). |
+| `->skipWhen($predicate)` | Per-route skip. Returning `true` bypasses enforcement for this route only. |
+
+> [!WARNING]
+> When any override is set, the spec serialises to a registry token. This
+> form does **not** survive `route:cache` — cache the routes after the
+> route file evaluates, or restrict cached routes to the legacy
+> `amount,asset,network` form.
 
 ### Variable price per resource
 
@@ -87,6 +123,19 @@ Route::get('/articles/{article}', ArticleController::class)
 > named middleware automatically, so declaration order doesn't matter as
 > long as it's present.
 
+When a route binds multiple `Priceable` parameters
+(`/articles/{article}/extras/{extra}`), the first one in iteration order
+wins. Override by reordering the route signature so the priceable to
+charge is bound first, or by implementing `Priceable` only on the model
+that should drive the price.
+
+> [!NOTE]
+> `Priceable` lookup keys off the URL **path** only — query strings are
+> ignored. `/articles/42?utm=x` and `/articles/42` resolve to the same
+> challenge. If you need pricing to vary by query parameter, compute it
+> inside the bound model's `x402Price()` (it has access to the active
+> `Request`) instead of relying on the resource resolver.
+
 ### Charge AI crawlers, free for humans
 
 ```php
@@ -107,12 +156,10 @@ User-Agent matched against a curated list (see
 ],
 ```
 
-Composes with `Priceable`: bots pay the model's price; humans pass through
-free regardless.
+Composes with `Priceable` (bots pay the model's price) and the builder
+(`->skipWhen()`, `->payTo()`, etc. apply once the bot check passes).
 
-### Skip enforcement conditionally — grace cache, IP allowlist, plan tier
-
-Register a predicate from a service provider's `boot()`:
+### Skip enforcement globally — grace cache, IP allowlist, plan tier
 
 ```php
 use Illuminate\Http\Request;
@@ -125,8 +172,7 @@ X402::enforceWhen(fn (Request $r) =>
 ```
 
 Returning `false` short-circuits the entire pipeline — no challenge, no
-nonce claim, no facilitator round-trip. Composes with the bots middleware
-(humans always free; bots gated by the predicate AND bot detection).
+nonce claim, no facilitator round-trip.
 
 > [!WARNING]
 > Call `enforceWhen` once, from a service provider's `boot()`. The
@@ -134,7 +180,49 @@ nonce claim, no facilitator round-trip. Composes with the bots middleware
 > controller, job, or middleware will mutate enforcement for *all*
 > subsequent requests in long-lived workers (Octane, RoadRunner). Per-
 > request logic belongs *inside* the closure, which receives the current
-> Request.
+> Request. The package automatically restores the boot-time predicate on
+> every Octane `RequestReceived` event when Octane is installed.
+
+For per-route skipping, prefer `->skipWhen()` on the builder — it's
+scoped, doesn't touch global state, and survives Octane.
+
+### Read the settle receipt in your controller
+
+After a successful settlement the `SettleResult` is exposed on the request:
+
+```php
+Route::get('/premium', function (Request $request) {
+    $settle = $request->x402Settle();   // ?\X402\Facilitator\SettleResult
+
+    return response()->json([
+        'tx' => $settle?->transaction,
+        'payer' => $settle?->payer,
+    ]);
+})->middleware(RequirePayment::using('0.01'));
+```
+
+Returns `null` when enforcement was skipped (e.g. `enforceWhen` returned
+`false`, or the route is wrapped in `RequirePaymentFromBots` and the
+caller was a human).
+
+### Throttle unpaid 402 floods
+
+The package registers a `throttle:x402` named rate limiter — 60 requests
+per IP per minute by default. Apply it before the payment middleware so
+unsigned requests don't tie up facilitator capacity:
+
+```php
+Route::get('/premium', PremiumController::class)
+    ->middleware(['throttle:x402', RequirePayment::using('0.01')]);
+```
+
+Tune the cap via `X402_RATE_LIMIT_PER_MINUTE`. Set to `0` to skip the
+package's registration entirely and define your own limiter under the
+same key:
+
+```php
+RateLimiter::for('x402', fn (Request $r) => Limit::perMinute(120)->by($r->ip()));
+```
 
 ### Pay outbound API calls
 
@@ -146,6 +234,84 @@ Wallet key resolved from `config/x402.php` (`X402_PRIVATE_KEY`). Signs a
 fresh authorization for each request the upstream returns 402 on, then
 retries with `X-PAYMENT`.
 
+For per-tenant or per-request wallet selection (HD wallet derivation,
+KMS-backed signers, multi-tenant SaaS), bind a custom resolver and
+optionally pass a context to the macro:
+
+```php
+use X402\Laravel\Client\WalletResolver;
+
+$this->app->bind(WalletResolver::class, MyTenantWalletResolver::class);
+
+Http::withX402(context: $tenantId)->post('https://api.example.com/...');
+```
+
+## Events
+
+The middleware and outbound macro dispatch Laravel events so you can
+record receipts, alert on failures, or hand work off to a queue.
+
+| Event | Fires when | Payload |
+|---|---|---|
+| `X402\Laravel\Events\PaymentSettled` | Facilitator settles an inbound payment | `SettleResult $result`, `string $resource` |
+| `X402\Laravel\Events\PaymentRejected` | Facilitator rejects verify, or settle fails | `string $reason`, `string $resource` |
+| `X402\Laravel\Events\OutboundPaymentSent` | `Http::withX402()` countersigns a 402 challenge and retries | `string $url`, `string $amount`, `string $asset`, `string $network`, `string $payTo` |
+
+```php
+use X402\Laravel\Events\PaymentSettled;
+
+Event::listen(PaymentSettled::class, function (PaymentSettled $e): void {
+    Log::info('paid', [
+        'resource' => $e->resource,
+        'tx' => $e->result->transaction,
+        'payer' => $e->result->payer,
+    ]);
+});
+```
+
+## Testing
+
+```bash
+composer test
+```
+
+The package ships a `FakeFacilitator` so consumers can test paid routes
+without a network round-trip:
+
+```php
+use X402\Laravel\Events\PaymentSettled;
+use X402\Laravel\Facades\X402;
+
+it('charges and serves premium content', function (): void {
+    Event::fake([PaymentSettled::class]);
+    $fake = X402::fake();
+
+    $this->withHeader('X-PAYMENT', $signedHeader)
+        ->get('/premium')
+        ->assertOk();
+
+    $fake->assertSettled('https://localhost/premium');
+    Event::assertDispatched(PaymentSettled::class);
+});
+
+// Drive failure paths:
+X402::fake()->rejectVerify('insufficient-funds');
+X402::fake()->failSettle('on-chain-revert');
+```
+
+`X402::fake()` swaps the bound `FacilitatorClient` for a recording fake
+that still dispatches the same Laravel events — `Event::fake()` works
+alongside.
+
+## Console commands
+
+| Command | Purpose |
+|---|---|
+| `php artisan x402:install` | Publish config and append `X402_RECIPIENT` / `X402_PRIVATE_KEY` to `.env`. Idempotent — existing values are never overwritten. |
+| `php artisan x402:verify-config` | Validate config, resolve the wallet, report missing values. Pass `--ping` to additionally probe the configured facilitator URL with the configured auth headers. |
+| `php artisan x402:list-routes` | Tabulate every route guarded by `RequirePayment` / `RequirePaymentFromBots` with its amount, network, asset, and per-route overrides. |
+| `php artisan x402:test-payment {url}` | Send a test request through `Http::withX402()` and report the settlement. Flags: `--simulate-bot=GPTBot/1.0` to test the bots middleware, `--ping` for an unsigned request that just reports the 402 challenge, `--json` for machine-readable output. |
+
 ## Configuration
 
 The most-set keys (see `config/x402.php` for the full reference):
@@ -154,12 +320,38 @@ The most-set keys (see `config/x402.php` for the full reference):
 |-----|-----|---------|
 | `recipient` | `X402_RECIPIENT` | _required_ |
 | `network` | `X402_NETWORK` | `eip155:8453` (Base) |
+| `networks` | _(array)_ | Slug → CAIP-2 map (`base`, `polygon`, …). Add custom chains here. |
 | `asset.address` | `X402_ASSET_ADDRESS` | USDC on Base |
+| `assets` | _(array)_ | Symbol → `{address, decimals, eip712}` map. Resolved when `RequirePayment::using('0.01', 'PYUSD')` picks a non-default asset. |
 | `facilitator.url` | `X402_FACILITATOR_URL` | `https://x402.org/facilitator` |
 | `wallet.private_key` | `X402_PRIVATE_KEY` | — |
 | `replay.cache_store` | `X402_REPLAY_CACHE` | default cache store |
 | `bots.patterns` | _(array \| null)_ | `null` (use built-in list) |
 | `bots.extra_patterns` | _(array)_ | `[]` |
+
+Custom networks and assets are picked up at request time — no rebuild
+required. Supply your own:
+
+```php
+// config/x402.php
+'networks' => [
+    'base' => 'eip155:8453',
+    'zora' => 'eip155:7777777',
+],
+
+'assets' => [
+    'USDC' => [
+        'address' => '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        'decimals' => 6,
+        'eip712' => ['name' => 'USD Coin', 'version' => '2'],
+    ],
+    'PYUSD' => [
+        'address' => '0x6c3ea9036406852006290770BEdFcAbA0e23A0e8',
+        'decimals' => 6,
+        'eip712' => ['name' => 'PayPal USD', 'version' => '1'],
+    ],
+],
+```
 
 ## MCP support
 
@@ -169,16 +361,7 @@ For [`laravel/mcp`](https://github.com/laravel/mcp) integration, install
 ## Changelog
 
 See [GitHub Releases](https://github.com/sandermuller/laravel-x402/releases)
-for the version history, or [CHANGELOG.md](CHANGELOG.md) once published.
-
-## Testing
-
-```bash
-composer test
-```
-
-Tests run against the framework-agnostic core via Orchestra Testbench — no
-host application needed.
+for the version history, or [CHANGELOG.md](CHANGELOG.md).
 
 ## Security
 

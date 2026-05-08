@@ -89,13 +89,13 @@ This syncs your `.ai/` changes to all generated locations:
 | `.github/skills/`                 | Skills for GitHub Copilot       |
 | `.github/copilot-instructions.md` | Instructions for GitHub Copilot |
 
-**All these files must be committed together** — they are kept in sync by `boost:update`.
+**All these files must be committed together** — they are kept in sync by `package-boost:sync`.
 
 ## Checklist for Changes
 
 - [ ] Edit files in `.ai/guidelines/` or `.ai/skills/` (never edit generated files)
 - [ ] Use `@verbatim` blocks in Blade files for code examples
 - [ ] Include clear activation triggers in skill descriptions
-- [ ] **Run `vendor/bin/testbench boost:update`** (CRITICAL!)
+- [ ] **Run `vendor/bin/testbench package-boost:sync`** (CRITICAL!)
 - [ ] **Verify `git status`** shows changes in: `.ai/`, `.claude/`, `.github/`, `CLAUDE.md`, `AGENTS.md`
 - [ ] **Commit ALL generated files together**

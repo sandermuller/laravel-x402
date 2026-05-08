@@ -12,7 +12,7 @@ use X402\Laravel\Tests\Stubs\StubFacilitator;
 
 beforeEach(function (): void {
     $this->app->make(EnforcementPolicy::class)->clear();
-    Route::middleware(RequirePayment::using('0.01'))->get('/gated', fn () => 'paid content');
+    Route::middleware((string) RequirePayment::using('0.01'))->get('/gated', fn () => 'paid content');
 });
 
 it('skips enforcement entirely when the policy predicate returns false', function (): void {

@@ -21,7 +21,7 @@ class PriceableArticle extends Model implements Priceable
 }
 
 it('charges the Priceable model price instead of the middleware fallback', function (): void {
-    Route::middleware([SubstituteBindings::class, RequirePayment::using('999.00')])
+    Route::middleware([SubstituteBindings::class, (string) RequirePayment::using('999.00')])
         ->get('/articles/{article}', fn (PriceableArticle $article): array => ['ok' => true, 'price' => $article->x402Price()]);
 
     Route::bind('article', fn () => new PriceableArticle(['premium' => true]));
@@ -40,7 +40,7 @@ it('charges the Priceable model price instead of the middleware fallback', funct
 });
 
 it('falls back to the middleware amount when no parameter is Priceable', function (): void {
-    Route::middleware(RequirePayment::using('0.05'))->get('/free/{thing}', fn () => 'ok');
+    Route::middleware((string) RequirePayment::using('0.05'))->get('/free/{thing}', fn () => 'ok');
     Route::bind('thing', fn () => new stdClass());
 
     $response = $this->get('/free/anything');

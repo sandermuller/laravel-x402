@@ -11,6 +11,7 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
+use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
@@ -63,19 +64,58 @@ final readonly class RequirePayment
         private PsrHttpFactory $symfonyToPsr,
         private HttpFoundationFactory $psrToSymfony,
         private EnforcementPolicy $policy,
+        private LoggerInterface $logger,
     ) {}
 
     /**
      * Type-safe entry point for `Route::middleware(...)` — mirrors Laravel's
-     * `Authenticate::using('api')` convention.
+     * `Authenticate::using('api')` convention. Returns a chainable spec
+     * (Stringable), so:
+     *
+     *   ->middleware(RequirePayment::using('0.01'))
+     *   ->middleware(RequirePayment::using('0.01')->payTo('0x...')->describing('Premium'))
+     *
+     * Both work — the spec serializes to the colon-separated middleware
+     * string at the moment Laravel hashes its middleware list.
      */
-    public static function using(string $amount, string $asset = 'USDC', string $network = 'base'): string
+    public static function using(string $amount, string $asset = 'USDC', string $network = 'base'): MiddlewareSpec
     {
-        return self::class . ':' . $amount . ',' . $asset . ',' . $network;
+        return new MiddlewareSpec(
+            middleware: self::class,
+            amount: $amount,
+            asset: $asset,
+            network: $network,
+        );
     }
 
     public function handle(Request $request, Closure $next, string $amount = '0', string $asset = 'USDC', string $networkSlug = 'base'): Response
     {
+        $spec = null;
+
+        if (str_starts_with($amount, 'x402-spec-')) {
+            $spec = MiddlewareSpecRegistry::resolve($amount);
+
+            if (! $spec instanceof MiddlewareSpec) {
+                throw new RuntimeException(sprintf(
+                    'Unknown x402 middleware spec token "%s". This usually means routes were cached '
+                    . '(`route:cache`) but the spec registry was not warmed — call your route file once '
+                    . 'or avoid `payTo()`/`describing()`/`skipWhen()` on cached routes.',
+                    $amount,
+                ));
+            }
+
+            $amount = $spec->amount;
+            $asset = $spec->asset;
+            $networkSlug = $spec->network;
+
+            if ($spec->skipWhen instanceof Closure && ($spec->skipWhen)($request)) {
+                /** @var Response $response */
+                $response = $next($request);
+
+                return $response;
+            }
+        }
+
         // PSR-7's UriInterface::getPath() always returns a leading slash; Laravel's
         // Request::path() strips it. Normalise here so the price-table lookup
         // matches the resourceResolver's PSR-derived key.
@@ -87,7 +127,7 @@ final readonly class RequirePayment
         $priceTable = new EloquentPriceTable(
             routeParameters: $routeParameters,
             expectedResource: $resourcePath,
-            challengeBuilder: fn (string $resolvedAmount): PaymentRequired => $this->buildChallenge($resolvedAmount, $asset, $networkSlug, $request),
+            challengeBuilder: fn (string $resolvedAmount): PaymentRequired => $this->buildChallenge($resolvedAmount, $asset, $networkSlug, $request, $spec),
             fallbackAmount: $amount,
         );
 
@@ -101,6 +141,7 @@ final readonly class RequirePayment
             version: Version::from(ConfigReader::string($this->config, 'x402.version', 'v1')),
             resourceResolver: static fn (ServerRequestInterface $psr) => $psr->getUri()->getPath(),
             shouldEnforce: $this->wrapPolicyForCore($request),
+            logger: $this->logger,
         );
 
         $psrRequest = $this->symfonyToPsr->createRequest($request);
@@ -123,20 +164,18 @@ final readonly class RequirePayment
         return static fn (ServerRequestInterface $_psr): bool => $predicate($request);
     }
 
-    private function buildChallenge(string $amount, string $assetSymbol, string $networkSlug, Request $request): PaymentRequired
+    private function buildChallenge(string $amount, string $assetSymbol, string $networkSlug, Request $request, ?MiddlewareSpec $spec = null): PaymentRequired
     {
         $network = $this->resolveNetwork($networkSlug);
-        $assetConfig = $this->config->get('x402.asset');
-
-        if (! is_array($assetConfig)) {
-            throw new RuntimeException('x402.asset config is missing.');
-        }
+        $assetConfig = $this->resolveAssetConfig($assetSymbol);
 
         $decimalsRaw = $assetConfig['decimals'] ?? 6;
         $decimals = is_int($decimalsRaw) ? $decimalsRaw : 6;
         $atomic = PriceParser::toAtomic($amount, $decimals);
 
-        $payTo = ConfigReader::string($this->config, 'x402.recipient');
+        $payTo = $spec instanceof MiddlewareSpec && $spec->payTo !== null
+            ? $spec->payTo
+            : ConfigReader::string($this->config, 'x402.recipient');
         if ($payTo === '') {
             throw new RuntimeException('x402.recipient is not configured. Set X402_RECIPIENT in your environment.');
         }
@@ -158,7 +197,9 @@ final readonly class RequirePayment
             payTo: $payTo,
             maxTimeoutSeconds: ConfigReader::int($this->config, 'x402.max_timeout_seconds', 60),
             resource: $request->fullUrl(),
-            description: $assetSymbol . ' payment for ' . $request->path(),
+            description: $spec instanceof MiddlewareSpec && $spec->description !== null
+                ? $spec->description
+                : $assetSymbol . ' payment for ' . $request->path(),
             extra: [
                 'name' => is_string($name) ? $name : '',
                 'version' => is_string($version) ? $version : '2',
@@ -168,14 +209,37 @@ final readonly class RequirePayment
 
     private function resolveNetwork(string $slug): string
     {
-        return match ($slug) {
-            'base' => 'eip155:8453',
-            'base-sepolia' => 'eip155:84532',
-            'ethereum' => 'eip155:1',
-            'polygon' => 'eip155:137',
-            'arbitrum' => 'eip155:42161',
-            default => $slug,
-        };
+        $map = $this->config->get('x402.networks');
+
+        if (is_array($map) && isset($map[$slug]) && is_string($map[$slug])) {
+            return $map[$slug];
+        }
+
+        return $slug;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveAssetConfig(string $symbol): array
+    {
+        $assets = $this->config->get('x402.assets');
+
+        if (is_array($assets) && isset($assets[$symbol]) && is_array($assets[$symbol])) {
+            /** @var array<string, mixed> $picked */
+            $picked = $assets[$symbol];
+
+            return $picked;
+        }
+
+        $default = $this->config->get('x402.asset');
+
+        if (! is_array($default)) {
+            throw new RuntimeException('x402.asset config is missing.');
+        }
+
+        /** @var array<string, mixed> $default */
+        return $default;
     }
 }
 
@@ -192,6 +256,12 @@ final readonly class InnerHandler implements RequestHandlerInterface
 
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
+        $settle = $request->getAttribute('x402.settle');
+
+        if ($settle !== null) {
+            $this->original->attributes->set('x402_settle', $settle);
+        }
+
         /** @var Response $symfonyResponse */
         $symfonyResponse = ($this->next)($this->original);
 

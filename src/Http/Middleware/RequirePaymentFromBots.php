@@ -41,11 +41,17 @@ final readonly class RequirePaymentFromBots
     ) {}
 
     /**
-     * Type-safe entry point for `Route::middleware(...)`.
+     * Type-safe entry point for `Route::middleware(...)`. Returns a chainable
+     * spec — see {@see RequirePayment::using()} for available overrides.
      */
-    public static function using(string $amount, string $asset = 'USDC', string $network = 'base'): string
+    public static function using(string $amount, string $asset = 'USDC', string $network = 'base'): MiddlewareSpec
     {
-        return self::class . ':' . $amount . ',' . $asset . ',' . $network;
+        return new MiddlewareSpec(
+            middleware: self::class,
+            amount: $amount,
+            asset: $asset,
+            network: $network,
+        );
     }
 
     public function handle(Request $request, Closure $next, string $amount = '0', string $asset = 'USDC', string $networkSlug = 'base'): Response

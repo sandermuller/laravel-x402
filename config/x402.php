@@ -40,8 +40,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Network slug map
+    |--------------------------------------------------------------------------
+    |
+    | Slugs used in `RequirePayment::using('0.01', 'USDC', 'base')` and the
+    | builder's `->onNetwork($slug)` resolve to CAIP-2 chain IDs via this map.
+    | Add custom chains here without releasing a new package version. Unknown
+    | slugs are passed through verbatim (e.g. raw "eip155:1234").
+    */
+
+    'networks' => [
+        'base' => 'eip155:8453',
+        'base-sepolia' => 'eip155:84532',
+        'ethereum' => 'eip155:1',
+        'polygon' => 'eip155:137',
+        'arbitrum' => 'eip155:42161',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Default settlement asset
     |--------------------------------------------------------------------------
+    |
+    | Used when a route doesn't specify an asset symbol, or specifies one not
+    | listed under `assets` below.
     */
 
     'asset' => [
@@ -51,6 +73,25 @@ return [
         'eip712' => [
             'name' => env('X402_ASSET_EIP712_NAME', 'USD Coin'),
             'version' => env('X402_ASSET_EIP712_VERSION', '2'),
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Asset symbol map
+    |--------------------------------------------------------------------------
+    |
+    | When a route picks an asset by symbol via the middleware arg or
+    | `->asAsset('PYUSD')`, the lookup hits this table. Symbols not listed
+    | here fall back to the `asset` block above. Keep address + decimals
+    | + eip712 in sync with the on-chain contract for each asset.
+    */
+
+    'assets' => [
+        'USDC' => [
+            'address' => '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+            'decimals' => 6,
+            'eip712' => ['name' => 'USD Coin', 'version' => '2'],
         ],
     ],
 
@@ -119,6 +160,21 @@ return [
     'bots' => [
         'patterns' => null,
         'extra_patterns' => [],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Rate limit (throttle:x402)
+    |--------------------------------------------------------------------------
+    |
+    | Default named limiter shipped by the package. Apply to gated routes via
+    | `->middleware(['throttle:x402', RequirePayment::using('0.01')])` to cap
+    | unpaid 402 floods. Set `per_minute => 0` to disable the named limiter
+    | entirely (host registers its own under the same key).
+    */
+
+    'rate_limit' => [
+        'per_minute' => (int) env('X402_RATE_LIMIT_PER_MINUTE', 60),
     ],
 
 ];

@@ -9,7 +9,11 @@ use Illuminate\Support\Facades\Http;
 
 final class TestPaymentCommand extends Command
 {
-    protected $signature = 'x402:test-payment {url : URL of an x402-protected resource}';
+    protected $signature = 'x402:test-payment
+        {url : URL of an x402-protected resource}
+        {--simulate-bot= : User-Agent to send (e.g. "GPTBot/1.0") to test the bots middleware}
+        {--ping : Send an unsigned request and just report the 402 challenge — no wallet, no payment}
+        {--json : Emit machine-readable JSON instead of the human report}';
 
     protected $description = 'Send a test request through the x402 client middleware and report the result.';
 
@@ -19,26 +23,58 @@ final class TestPaymentCommand extends Command
         $url = is_string($urlRaw) ? $urlRaw : '';
 
         if (filter_var($url, FILTER_VALIDATE_URL) === false) {
-            $this->error('Invalid URL: ' . ($url === '' ? '(empty)' : $url));
-
-            return self::INVALID;
+            return $this->fail('Invalid URL: ' . ($url === '' ? '(empty)' : $url));
         }
 
-        $this->info('GET ' . $url);
+        $userAgent = $this->option('simulate-bot');
+        $userAgent = is_string($userAgent) && $userAgent !== '' ? $userAgent : null;
 
-        $response = Http::withX402()->get($url);
+        $ping = (bool) $this->option('ping');
+        $json = (bool) $this->option('json');
 
-        $this->info('Status: ' . $response->status());
+        $client = $ping ? Http::asJson() : Http::withX402();
+
+        if ($userAgent !== null) {
+            $client = $client->withHeaders(['User-Agent' => $userAgent]);
+        }
+
+        $response = $client->get($url);
+
+        $report = [
+            'url' => $url,
+            'mode' => $ping ? 'ping' : 'pay',
+            'simulate_bot' => $userAgent,
+            'status' => $response->status(),
+            'success' => $response->successful(),
+            'receipt' => $this->extractReceipt($response->header('X-PAYMENT-RESPONSE'), $response->header('PAYMENT-RESPONSE')),
+            'challenge' => $response->status() === 402 ? $response->json() : null,
+        ];
+
+        if ($json) {
+            $this->line((string) json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
+            return $response->successful() || $response->status() === 402 ? self::SUCCESS : self::FAILURE;
+        }
+
+        $this->info(($ping ? 'PING ' : 'GET  ') . $url);
+
+        if ($userAgent !== null) {
+            $this->line('User-Agent: ' . $userAgent);
+        }
+
+        $this->line('Status: ' . $response->status());
+
+        if ($report['receipt'] !== null) {
+            $this->info('Settlement receipt: ' . $report['receipt']);
+        }
 
         if ($response->successful()) {
-            $receipt = $response->header('X-PAYMENT-RESPONSE');
-            if ($receipt === '') {
-                $receipt = $response->header('PAYMENT-RESPONSE');
-            }
+            return self::SUCCESS;
+        }
 
-            if ($receipt !== '') {
-                $this->info('Settlement receipt: ' . $receipt);
-            }
+        if ($response->status() === 402) {
+            $this->warn('402 — payment required.');
+            $this->line($response->body());
 
             return self::SUCCESS;
         }
@@ -47,5 +83,18 @@ final class TestPaymentCommand extends Command
         $this->line($response->body());
 
         return self::FAILURE;
+    }
+
+    private function extractReceipt(string $primary, string $fallback): ?string
+    {
+        if ($primary !== '') {
+            return $primary;
+        }
+
+        if ($fallback !== '') {
+            return $fallback;
+        }
+
+        return null;
     }
 }

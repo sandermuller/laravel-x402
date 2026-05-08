@@ -34,12 +34,6 @@ jobs:
         with:
           path: laravel-x402
 
-      - name: Checkout sandermuller/php-x402
-        uses: actions/checkout@v6
-        with:
-          repository: SanderMuller/php-x402
-          path: php-x402
-
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:

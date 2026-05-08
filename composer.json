@@ -21,7 +21,7 @@
     ],
     "require": {
         "php": "^8.2",
-        "sandermuller/php-x402": "^0.1@dev",
+        "sandermuller/php-x402": "^0.1",
         "illuminate/contracts": "^11.0|^12.0",
         "illuminate/http": "^11.0|^12.0",
         "illuminate/support": "^11.0|^12.0",
@@ -106,15 +106,6 @@
         },
         "sort-packages": true
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../php-x402",
-            "options": {
-                "symlink": true
-            }
-        }
-    ],
     "minimum-stability": "dev",
     "prefer-stable": true
 }

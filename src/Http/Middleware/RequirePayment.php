@@ -19,10 +19,10 @@ use X402\Laravel\Server\EloquentPriceTable;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
 use X402\Laravel\Support\PriceParser;
+use X402\Laravel\Support\SchemeMap;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\Version;
 use X402\Replay\NonceStoreContract;
-use X402\Schemes\Evm\ExactScheme;
 use X402\Server\PaymentEnforcer;
 
 /**
@@ -62,6 +62,7 @@ final readonly class RequirePayment
         private HttpFoundationFactory $psrToSymfony,
         private EnforcementPolicy $policy,
         private LoggerInterface $logger,
+        private SchemeMap $schemes,
     ) {}
 
     /**
@@ -134,12 +135,12 @@ final readonly class RequirePayment
             priceTable: $priceTable,
             facilitator: $this->facilitator,
             nonceStore: $this->nonceStore,
-            schemes: ['exact' => new ExactScheme()],
+            schemes: $this->schemes->map,
             responseFactory: $this->psr17,
             streamFactory: $this->psr17,
             version: Version::from(ConfigReader::string($this->config, 'x402.version', 'v1')),
             resourceResolver: static fn (ServerRequestInterface $psr) => $psr->getUri()->getPath(),
-            // Global EnforcementPolicy is checked above (line ~125); core slot stays null.
+            // Global EnforcementPolicy is checked above (see $globalPredicate); core slot stays null.
             shouldEnforce: null,
             logger: $this->logger,
         );

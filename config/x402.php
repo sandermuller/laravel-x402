@@ -158,6 +158,20 @@ return [
         'cache_store' => env('X402_RESPONSE_CACHE_STORE', null), // null = default cache store
         'ttl' => (int) env('X402_RESPONSE_CACHE_TTL', 3600),
         'prefix' => 'x402:idem:',
+
+        /*
+        | Optional: extend the response-header allow-list applied to the
+        | cached snapshot. `null` defers to upstream php-x402's default
+        | (Content-Type, Content-Language, Content-Length,
+        | Content-Disposition, Cache-Control, ETag, Last-Modified,
+        | Location, X-PAYMENT-RESPONSE, PAYMENT-RESPONSE). Set an array
+        | here to add app-specific headers (e.g. CORS exposure headers).
+        |
+        | The hard-block list (Set-Cookie, Authorization,
+        | Proxy-Authorization, Www-Authenticate, Cookie) is enforced
+        | upstream regardless and cannot be opted out of.
+        */
+        'response_headers' => null,
     ],
 
     /*

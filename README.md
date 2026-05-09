@@ -269,6 +269,39 @@ Cache key is `(network, from, nonce, signature bytes)` — a forged
 signature with the same nonce does not replay. TTL defaults to 1 hour
 and must comfortably exceed the replay window (`X402_RESPONSE_CACHE_TTL`).
 
+**What's stored.** Only the response status, body, and a safe-by-default
+header allow-list (`Content-Type`, `Content-Length`, `Cache-Control`,
+`ETag`, `Last-Modified`, `Location`, the `PAYMENT-RESPONSE` receipt, …).
+`Set-Cookie`, `Authorization`, `Proxy-Authorization`, `Www-Authenticate`,
+and `Cookie` are **always dropped** — anyone replaying a stolen
+`X-PAYMENT` header would otherwise inherit the original buyer's
+session. Hosts that need additional headers in the cached snapshot can
+extend the allow-list:
+
+```php
+// config/x402.php
+'response_cache' => [
+    // ... existing keys ...
+    'response_headers' => [
+        // Defaults the upstream library ships:
+        'Content-Type', 'Content-Language', 'Content-Length',
+        'Content-Disposition', 'Cache-Control', 'ETag', 'Last-Modified',
+        'Location', 'X-PAYMENT-RESPONSE', 'PAYMENT-RESPONSE',
+        // App-specific addition:
+        'Access-Control-Expose-Headers',
+    ],
+],
+```
+
+The hard-block list is enforced regardless of what's added here.
+
+**What's skipped.** Range / partial / negotiated responses bypass the
+idempotent cache and run fresh on each retry — the `Vary`, `Content-Range`,
+`Content-Encoding`, `Accept-Ranges` headers and `206 Partial Content`
+trigger a skip. Streaming responses (`StreamedResponse` / `BinaryFileResponse`)
+should not be stacked behind `x402.cache`; the cache only helps when the
+controller returns a fully-buffered body.
+
 ## Events
 
 The middleware and outbound macro dispatch Laravel events so you can

@@ -46,8 +46,10 @@ use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
+use X402\Laravel\Support\SchemeMap;
 use X402\Protocol\Version;
 use X402\Replay\NonceStoreContract;
+use X402\Schemes\Evm\ExactScheme;
 use X402\Server\PaymentResponseCache;
 
 final class X402ServiceProvider extends ServiceProvider
@@ -59,11 +61,26 @@ final class X402ServiceProvider extends ServiceProvider
         $this->app->singleton(EnforcementPolicy::class, fn (): EnforcementPolicy => new EnforcementPolicy());
 
         $this->registerPsrFactories();
+        $this->registerSchemes();
         $this->registerNonceStore();
         $this->registerResponseCache();
         $this->registerFacilitator();
         $this->registerBotDetector();
         $this->registerWallet();
+    }
+
+    /**
+     * Single source of truth for the scheme map shared between
+     * {@see RequirePayment} (driving `PaymentEnforcer`) and the binding
+     * for `PaymentResponseCache`. Hosts that add a custom scheme rebind
+     * `SchemeMap` and both halves of the middleware stack pick it up —
+     * the "operator drift" failure mode upstream's 0.3.0 audit flagged.
+     */
+    private function registerSchemes(): void
+    {
+        $this->app->singleton(SchemeMap::class, static fn (): SchemeMap => new SchemeMap([
+            'exact' => new ExactScheme(),
+        ]));
     }
 
     private function registerPsrFactories(): void
@@ -88,15 +105,9 @@ final class X402ServiceProvider extends ServiceProvider
     {
         $this->app->bind(NonceStoreContract::class, function (Application $app): NonceStoreContract {
             $config = $app->make(Repository::class);
-            $store = ConfigReader::stringOrNull($config, 'x402.replay.cache_store');
-            $cache = $app->make(CacheRepository::class);
-
-            if ($store !== null && $store !== '') {
-                $cache = $app->make(Factory::class)->store($store);
-            }
 
             return new LaravelNonceStore(
-                $cache,
+                $this->resolveCacheStore($app, ConfigReader::stringOrNull($config, 'x402.replay.cache_store')),
                 ConfigReader::string($config, 'x402.replay.prefix', 'x402:nonce:'),
             );
         });
@@ -106,24 +117,44 @@ final class X402ServiceProvider extends ServiceProvider
     {
         $this->app->singleton(PaymentResponseCache::class, function (Application $app): PaymentResponseCache {
             $config = $app->make(Repository::class);
-            $store = ConfigReader::stringOrNull($config, 'x402.response_cache.cache_store');
-            $cache = $app->make(CacheRepository::class);
-
-            if ($store !== null && $store !== '') {
-                $cache = $app->make(Factory::class)->store($store);
-            }
-
+            $cache = $this->resolveCacheStore($app, ConfigReader::stringOrNull($config, 'x402.response_cache.cache_store'));
             $psr17 = $app->make(Psr17Factory::class);
 
-            return new PaymentResponseCache(
-                cache: new LaravelPsr16Bridge($cache),
-                responseFactory: $psr17,
-                streamFactory: $psr17,
-                version: Version::from(ConfigReader::string($config, 'x402.version', 'v1')),
-                ttl: ConfigReader::int($config, 'x402.response_cache.ttl', 3600),
-                prefix: ConfigReader::string($config, 'x402.response_cache.prefix', 'x402:idem:'),
-            );
+            // Optional allow-list extension: null (default) defers to upstream's
+            // DEFAULT_RESPONSE_HEADER_ALLOWLIST. The hard-block list (Set-Cookie,
+            // Authorization, Proxy-Authorization, Www-Authenticate, Cookie) is
+            // enforced upstream regardless and cannot be opted out of.
+            $headerOverride = ConfigReader::stringListOrNull($config, 'x402.response_cache.response_headers');
+
+            $args = [
+                'cache' => new LaravelPsr16Bridge($cache),
+                'responseFactory' => $psr17,
+                'streamFactory' => $psr17,
+                'schemes' => $app->make(SchemeMap::class)->map,
+                'version' => Version::from(ConfigReader::string($config, 'x402.version', 'v1')),
+                'ttl' => ConfigReader::int($config, 'x402.response_cache.ttl', 3600),
+                'prefix' => ConfigReader::string($config, 'x402.response_cache.prefix', 'x402:idem:'),
+            ];
+
+            if ($headerOverride !== null) {
+                $args['responseHeadersAllowList'] = $headerOverride;
+            }
+
+            return new PaymentResponseCache(...$args);
         });
+    }
+
+    /**
+     * Resolve a {@see CacheRepository} for the named store, falling back to
+     * the default cache when `$store` is null or empty.
+     */
+    private function resolveCacheStore(Application $app, ?string $store): CacheRepository
+    {
+        if ($store === null || $store === '') {
+            return $app->make(CacheRepository::class);
+        }
+
+        return $app->make(Factory::class)->store($store);
     }
 
     private function registerFacilitator(): void

@@ -92,15 +92,6 @@ final readonly class RequirePayment
         if (str_starts_with($amount, 'x402-spec-')) {
             $spec = MiddlewareSpecRegistry::resolve($amount);
 
-            if (! $spec instanceof MiddlewareSpec) {
-                throw new RuntimeException(sprintf(
-                    'Unknown x402 middleware spec token "%s". This usually means routes were cached '
-                    . '(`route:cache`) but the spec registry was not warmed — call your route file once '
-                    . 'or avoid `payTo()`/`describing()`/`skipWhen()` on cached routes.',
-                    $amount,
-                ));
-            }
-
             $amount = $spec->amount;
             $asset = $spec->asset;
             $networkSlug = $spec->network;

@@ -8,7 +8,6 @@ use Closure;
 use Illuminate\Console\Command;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
-use X402\Laravel\Http\Middleware\MiddlewareSpec;
 use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
@@ -96,19 +95,17 @@ final class ListRoutesCommand extends Command
 
                 $params = $middleware === $needle ? '' : substr($middleware, strlen($needle) + 1);
 
-                if (str_starts_with($params, 'x402-spec-')) {
+                if (str_starts_with($params, 'x402-spec-') && MiddlewareSpecRegistry::has($params)) {
                     $spec = MiddlewareSpecRegistry::resolve($params);
 
-                    if ($spec instanceof MiddlewareSpec) {
-                        return [
-                            $kind,
-                            $spec->amount,
-                            $spec->asset,
-                            $spec->network,
-                            $spec->payTo ?? '(default)',
-                            $spec->skipWhen instanceof Closure ? 'yes' : 'no',
-                        ];
-                    }
+                    return [
+                        $kind,
+                        $spec->amount,
+                        $spec->asset,
+                        $spec->network,
+                        $spec->payTo ?? '(default)',
+                        $spec->skipWhen instanceof Closure ? 'yes' : 'no',
+                    ];
                 }
 
                 $parts = explode(',', $params);

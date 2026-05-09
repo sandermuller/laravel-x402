@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Route;
 use X402\Facilitator\FacilitatorClient;
-use X402\Laravel\Http\Middleware\MiddlewareSpec;
 use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Tests\Stubs\StubFacilitator;
@@ -38,13 +37,16 @@ it('mutating a spec after registration does not affect the cached entry', functi
 
     $spec->payTo('0xother');
 
-    $resolved = MiddlewareSpecRegistry::resolve($token);
+    expect(MiddlewareSpecRegistry::resolve($token)->payTo)->toBe('0xroute');
+});
 
-    if (! $resolved instanceof MiddlewareSpec) {
-        throw new RuntimeException('expected resolved spec, got null');
-    }
+it('resolve throws a domain exception with a route-cache hint when the token is unknown', function (): void {
+    expect(fn (): mixed => MiddlewareSpecRegistry::resolve('x402-spec-bogus'))
+        ->toThrow(RuntimeException::class, 'route:cache');
+});
 
-    expect($resolved->payTo)->toBe('0xroute');
+it('has() returns false for unknown tokens', function (): void {
+    expect(MiddlewareSpecRegistry::has('x402-spec-bogus'))->toBeFalse();
 });
 
 it('uses the per-route payTo override when challenging', function (): void {

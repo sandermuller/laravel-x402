@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace X402\Laravel\Http\Middleware;
 
 use Closure;
+use RuntimeException;
 
 /**
  * Process-global token store for {@see MiddlewareSpec}. Specs are registered
@@ -41,9 +42,30 @@ final class MiddlewareSpecRegistry
         return $token;
     }
 
-    public static function resolve(string $token): ?MiddlewareSpec
+    /**
+     * Resolve a token to its registered spec. Throws if the token is
+     * unknown — typically a sign that routes were cached (`route:cache`)
+     * before the spec registry was warmed.
+     *
+     * Callers wanting "spec or null" semantics can use {@see has()} first.
+     */
+    public static function resolve(string $token): MiddlewareSpec
     {
-        return self::$specs[$token] ?? null;
+        if (! isset(self::$specs[$token])) {
+            throw new RuntimeException(sprintf(
+                'Unknown x402 middleware spec token "%s". This usually means routes were cached '
+                . '(`route:cache`) but the spec registry was not warmed — call your route file once '
+                . 'or avoid `payTo()`/`describing()`/`skipWhen()` on cached routes.',
+                $token,
+            ));
+        }
+
+        return self::$specs[$token];
+    }
+
+    public static function has(string $token): bool
+    {
+        return isset(self::$specs[$token]);
     }
 
     public static function flush(): void

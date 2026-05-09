@@ -158,7 +158,7 @@ it('FakeFacilitator wired via X402::fake records calls', function (): void {
 
     $this->withHeader('X-PAYMENT', signedHeaderForMidGaps())->get('/fake');
 
-    expect($fake->verifyCalls)->toHaveCount(1)
-        ->and($fake->settleCalls)
+    expect($fake->verifyCalls())->toHaveCount(1)
+        ->and($fake->settleCalls())
         ->toHaveCount(1);
 });

@@ -90,7 +90,28 @@ final class InstallCommand extends Command
 
     private function appendEnv(string $path, string $key, string $value): void
     {
-        $line = $key . '=' . $value . PHP_EOL;
+        $line = $key . '=' . self::quoteEnvValue($value) . PHP_EOL;
         file_put_contents($path, $line, FILE_APPEND | LOCK_EX);
+    }
+
+    /**
+     * Quote an `.env` value when it contains characters that the parser
+     * (`Dotenv`) would interpret — whitespace, `#` (comment marker),
+     * `"` / `'` / `\` / `$` — so the appended line round-trips correctly.
+     *
+     * Public so the quoting rule is unit-testable; the surrounding
+     * scaffold logic is integration-shaped.
+     */
+    public static function quoteEnvValue(string $value): string
+    {
+        if ($value === '') {
+            return '';
+        }
+
+        if (preg_match('/[\s#"\'\\\\$]/', $value) !== 1) {
+            return $value;
+        }
+
+        return '"' . str_replace(['\\', '"', '$'], ['\\\\', '\\"', '\\$'], $value) . '"';
     }
 }

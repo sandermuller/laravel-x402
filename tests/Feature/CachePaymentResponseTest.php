@@ -46,8 +46,8 @@ it('replays the cached response when the same signed header arrives twice', func
 
     // Settlement happened exactly once — second call short-circuited
     // inside PaymentResponseCache before the facilitator was reached.
-    expect($fake->verifyCalls)->toHaveCount(1)
-        ->and($fake->settleCalls)->toHaveCount(1);
+    expect($fake->verifyCalls())->toHaveCount(1)
+        ->and($fake->settleCalls())->toHaveCount(1);
 });
 
 it('forge guard — same (network, from, nonce) tuple but different signature bytes does not replay', function (): void {

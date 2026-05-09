@@ -8,6 +8,11 @@ namespace X402\Laravel\Events;
  * Fired by the `Http::withX402()` macro after a 402 challenge has been
  * countersigned and the request retried with `X-PAYMENT`. The signature
  * has been sent — settlement may still be pending on the upstream side.
+ *
+ * `$context` is whatever the caller threaded through
+ * `Http::withX402($privateKey, $context)` — typically a tenant id,
+ * job id, or correlation hash so listeners can attribute outbound
+ * spend back to its origin.
  */
 final readonly class OutboundPaymentSent
 {
@@ -17,5 +22,6 @@ final readonly class OutboundPaymentSent
         public string $asset,
         public string $network,
         public string $payTo,
+        public mixed $context = null,
     ) {}
 }

@@ -48,7 +48,7 @@ final class HttpClientMacro
             $version = Version::from(ConfigReader::string($container->make(Repository::class), 'x402.version', 'v1'));
             $events = $container->make(Dispatcher::class);
 
-            return self::guzzleMiddleware($wallet, $version, $events);
+            return self::guzzleMiddleware($wallet, $version, $events, $context);
         };
 
         $http::macro('withX402', function (?string $privateKey = null, mixed $context = null) use ($factory): PendingRequest {
@@ -62,13 +62,13 @@ final class HttpClientMacro
     /**
      * Build the Guzzle handler-stack middleware closure.
      */
-    public static function guzzleMiddleware(Wallet $wallet, Version $version, ?Dispatcher $events = null): Closure
+    public static function guzzleMiddleware(Wallet $wallet, Version $version, Dispatcher $events, mixed $context = null): Closure
     {
-        return static fn (callable $next): Closure => static function (RequestInterface $request, array $options) use ($next, $wallet, $version, $events) {
+        return static fn (callable $next): Closure => static function (RequestInterface $request, array $options) use ($next, $wallet, $version, $events, $context) {
             /** @var PromiseInterface $promise */
             $promise = $next($request, $options);
 
-            return $promise->then(static function (ResponseInterface $response) use ($next, $request, $options, $wallet, $version, $events) {
+            return $promise->then(static function (ResponseInterface $response) use ($next, $request, $options, $wallet, $version, $events, $context) {
                 if ($response->getStatusCode() !== 402) {
                     return $response;
                 }
@@ -84,12 +84,13 @@ final class HttpClientMacro
 
                 $paid = $request->withHeader($negotiated->signatureHeader(), $signed->toHeader());
 
-                $events?->dispatch(new OutboundPaymentSent(
+                $events->dispatch(new OutboundPaymentSent(
                     url: (string) $request->getUri(),
                     amount: $challenge->amount,
                     asset: $challenge->asset,
                     network: $challenge->network,
                     payTo: $challenge->payTo,
+                    context: $context,
                 ));
 
                 return $next($paid, $options);

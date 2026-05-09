@@ -46,12 +46,28 @@ final class FakeFacilitator implements FacilitatorClient
     /**
      * @var list<array{signature: PaymentSignature, challenge: PaymentRequired}>
      */
-    public array $verifyCalls = [];
+    private array $verifyCalls = [];
 
     /**
      * @var list<array{signature: PaymentSignature, challenge: PaymentRequired}>
      */
-    public array $settleCalls = [];
+    private array $settleCalls = [];
+
+    /**
+     * @return list<array{signature: PaymentSignature, challenge: PaymentRequired}>
+     */
+    public function verifyCalls(): array
+    {
+        return $this->verifyCalls;
+    }
+
+    /**
+     * @return list<array{signature: PaymentSignature, challenge: PaymentRequired}>
+     */
+    public function settleCalls(): array
+    {
+        return $this->settleCalls;
+    }
 
     public function rejectVerify(string $reason = 'rejected'): self
     {

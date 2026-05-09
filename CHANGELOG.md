@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.0 - 2026-05-09
+
+Bug-fix and hardening release. Adds an idempotent paid-response cache (`x402.cache` middleware) so a dropped client connection between facilitator-settle and response-delivery no longer 402s the user who already paid. `OutboundPaymentSent` gains a `mixed $context` field for tenant / job correlation. Several quality fixes addressed by an internal audit. Tests pass on the CI matrix.
+
+### What's new
+
+- **`x402.cache` middleware** — Laravel adapter for upstream `X402\Server\PaymentResponseCache`. Stack it *before* `RequirePayment` in a route's middleware list and the cached 2xx body is replayed when the same signed authorization is retried after a transport error. Cache key is `(network, from, nonce, signature bytes)`, so a forged signature with the same nonce does not replay. PSR-16 backed via the new `LaravelPsr16Bridge` over Illuminate's cache; per-route opt-in. Configured under `x402.response_cache` (`cache_store`, `ttl`, `prefix`).
+- **`OutboundPaymentSent::$context`** — `Http::withX402($privateKey, $context)` now threads `$context` (mixed: tenant id, job id, correlation hash) onto the dispatched event. Listeners attribute outbound spend back to its origin without parsing URLs. Defaulted to `null` — a non-breaking addition.
+- **`MiddlewareSpecRegistry::has()`** — companion to `resolve()` for callers that want "spec or absent" semantics without a try/catch (`x402:list-routes` uses it to stay tolerant of stale tokens).
+
+### Bug fixes
+
+- **`MiddlewareSpec` no longer mutates the cached entry under its own token.** Fluent setters return `$this`, and the registry hashed the live object — a builder kept alive after `(string) $spec` could rewrite the resolved spec from a controller. Registry now snapshots via `clone` on register; mutating the original after stringify has no effect on what the request sees.
+- **`MiddlewareSpecRegistry` no longer leaks across Octane requests.** `static $specs` accumulated forever in long-lived workers. The Octane `RequestReceived` listener (the one that already restores `EnforcementPolicy`) now calls `MiddlewareSpecRegistry::flush()` so each request rebuilds its own spec set from `routes/web.php`.
+- **`DispatchingFacilitator` no longer swallows transport exceptions.** A thrown `verify()` / `settle()` (network / HTTP error) bypassed `PaymentRejected`, silently undercounting facilitator failures. Both methods now emit `PaymentRejected` with the exception class + message as reason and rethrow.
+- **`RequirePayment` now rejects unknown asset symbols** instead of silently falling back to the default. Previously `RequirePayment::using('0.01', 'USD')` (typo for `'USDC'`) picked the default asset on a multi-asset host — security-relevant. Throws with a list of known symbols; the configured default symbol still falls back as before.
+- **`InstallCommand` quotes `.env` values** containing whitespace, `#`, `"`, `'`, `\`, or `$`. Without this a recipient or key with a `#` was truncated to a comment marker on the next `Dotenv` parse.
+- **Global `X402::enforceWhen()` predicate now short-circuits before PSR / price-table / enforcer construction**, so a bypassed request pays no per-request allocation cost. `enforceWhen()` itself throws on a missing application instance (matches `fake()`) rather than silently no-op'ing.
+- **`X402::enforceWhen()`, `X402::fake()` consistency** — both throw a `RuntimeException` when the facade application is unbound. Adopters debugging a non-firing predicate get a signal instead of silence.
+
+### Notes
+
+- Pre-1.0 minor: public API may still shift before `v1.0`. `OutboundPaymentSent` gained a positional argument; downstream listeners using named-argument construction are unaffected, positional users should add `null` for `$context`.
+- `MiddlewareSpecRegistry::resolve()` now throws on unknown tokens instead of returning `?MiddlewareSpec`. The thrown message carries the same "did you cache routes?" hint that `RequirePayment::handle()` previously inlined. Use the new `has()` helper if you need the nullable semantics.
+- `FakeFacilitator::$verifyCalls` and `$settleCalls` are now private — read them via `verifyCalls()` / `settleCalls()` getters. Public assertion helpers (`assertVerified`, `assertSettled`, `assertNothingSettled`) are unchanged.
+
+**Full Changelog**: https://github.com/SanderMuller/laravel-x402/compare/0.2.0...0.3.0
+
 ## 0.2.0 - 2026-05-08
 
 Tracks `sandermuller/php-x402` `^0.2`. Adds a `MiddlewareSpec` registry so `::using()` and the string alias `x402:…` resolve through the same path, a `FakeFacilitator` testing seam reachable via `X402::fake()`, an `OutboundPaymentSent` event, and two new console commands (`x402:install`, `x402:list-routes`). Tests pass on the CI matrix.

@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0 - 2026-05-09
+
+### What's new
+
+- **`x402.cache` snapshots are now privacy-safe by default.** Upstream `php-x402` 0.3.0's `PaymentResponseCache` filters cached response headers through `DEFAULT_RESPONSE_HEADER_ALLOWLIST` (`Content-Type`, `Content-Language`, `Content-Length`, `Content-Disposition`, `Cache-Control`, `ETag`, `Last-Modified`, `Location`, plus the v1/v2 `PAYMENT-RESPONSE` receipt). `Set-Cookie`, `Authorization`, `Proxy-Authorization`, `Www-Authenticate`, and `Cookie` are hard-blocked regardless of allow-list configuration — anyone replaying a stolen `X-PAYMENT` header would otherwise inherit the original buyer's session. Filtering is applied on both write and read paths, so any pre-existing cached snapshots from `laravel-x402` 0.3.0 (php-x402 0.2.x) are sanitised on first hit after upgrade — no operator action required.
+- **`x402.response_cache.response_headers` config knob** — extend the upstream allow-list with app-specific headers (CORS exposure, custom telemetry headers). Defaults to `null` (use upstream's list as-is). The hard-block list is enforced upstream regardless and cannot be opted out of.
+- **`X402\Laravel\Support\SchemeMap`** — readonly wrapper around `array<string, SchemeContract>`. Single source of truth for the scheme map shared by `RequirePayment` (driving `PaymentEnforcer`) and the service-provider binding for `PaymentResponseCache`. Hosts that register a custom scheme rebind `SchemeMap` once and both halves of the middleware stack pick it up — closes the operator-drift failure mode upstream's 0.3.0 audit flagged.
+- **Variant-response responses now skip the idempotent cache** instead of caching incorrectly. Range / negotiated / partial-content responses (`206 Partial Content`, or any response carrying `Vary` / `Content-Range` / `Content-Encoding` / `Accept-Ranges`) flow through the enforcer fresh on each retry. Streaming routes (`StreamedResponse` / `BinaryFileResponse`) should still not be stacked behind `x402.cache`; the cache only helps when the controller returns a fully-buffered body.
+
+### Notes
+
+- **Requires `sandermuller/php-x402` `^0.3`.** Upstream's `PaymentResponseCache` constructor changed (now requires `schemes:` — the same map `PaymentEnforcer` takes); the service-provider binding was updated accordingly. Adopters that bind their own `PaymentResponseCache` instance must supply `schemes:`.
+- Adopters with cached snapshots from `laravel-x402` 0.3.0 need no action — upstream's read-path hard-block sanitises pre-existing entries on first hit. If your TTL is shorter than 1 hour, snapshots will be naturally evicted before the upgrade window closes.
+- Custom schemes: pre-1.0 the public `SchemeMap` shape is a single map property. Adopters who wire a custom `SchemeContract` rebind `X402\Laravel\Support\SchemeMap::class` in their service provider and both `RequirePayment` and `PaymentResponseCache` pick up the change.
+- README's "Idempotent paid responses — replay-on-retry" recipe gained three paragraphs: what's stored (allow-list + receipt header), how to extend the allow-list, what's skipped (variant + range responses + streaming routes).
+- `x402.bots`, `x402` named middlewares unchanged.
+
+**Full Changelog**: https://github.com/SanderMuller/laravel-x402/compare/0.3.0...0.4.0
+
 ## 0.3.0 - 2026-05-09
 
 Bug-fix and hardening release. Adds an idempotent paid-response cache (`x402.cache` middleware) so a dropped client connection between facilitator-settle and response-delivery no longer 402s the user who already paid. `OutboundPaymentSent` gains a `mixed $context` field for tenant / job correlation. Several quality fixes addressed by an internal audit. Tests pass on the CI matrix.

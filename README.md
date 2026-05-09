@@ -246,6 +246,29 @@ $this->app->bind(WalletResolver::class, MyTenantWalletResolver::class);
 Http::withX402(context: $tenantId)->post('https://api.example.com/...');
 ```
 
+The `$context` is forwarded onto every `OutboundPaymentSent` event so
+listeners can attribute spend back to a tenant, job, or correlation id
+without parsing the URL.
+
+### Idempotent paid responses — replay-on-retry
+
+If a client's connection drops between facilitator-settle and the
+response landing, the same signed authorization can be retried — but
+the nonce store will reject the duplicate and 402 a user who already
+paid. Stack `x402.cache` *before* the payment middleware to short-
+circuit the retry with the cached 2xx body:
+
+```php
+Route::middleware([
+    'x402.cache',                    // cache lookup — short-circuits on hit
+    RequirePayment::using('0.01'),   // payment enforcer (skipped on hit)
+])->get('/premium', PremiumController::class);
+```
+
+Cache key is `(network, from, nonce, signature bytes)` — a forged
+signature with the same nonce does not replay. TTL defaults to 1 hour
+and must comfortably exceed the replay window (`X402_RESPONSE_CACHE_TTL`).
+
 ## Events
 
 The middleware and outbound macro dispatch Laravel events so you can
@@ -255,7 +278,7 @@ record receipts, alert on failures, or hand work off to a queue.
 |---|---|---|
 | `X402\Laravel\Events\PaymentSettled` | Facilitator settles an inbound payment | `SettleResult $result`, `string $resource` |
 | `X402\Laravel\Events\PaymentRejected` | Facilitator rejects verify, or settle fails | `string $reason`, `string $resource` |
-| `X402\Laravel\Events\OutboundPaymentSent` | `Http::withX402()` countersigns a 402 challenge and retries | `string $url`, `string $amount`, `string $asset`, `string $network`, `string $payTo` |
+| `X402\Laravel\Events\OutboundPaymentSent` | `Http::withX402()` countersigns a 402 challenge and retries | `string $url`, `string $amount`, `string $asset`, `string $network`, `string $payTo`, `mixed $context` |
 
 ```php
 use X402\Laravel\Events\PaymentSettled;
@@ -326,6 +349,8 @@ The most-set keys (see `config/x402.php` for the full reference):
 | `facilitator.url` | `X402_FACILITATOR_URL` | `https://x402.org/facilitator` |
 | `wallet.private_key` | `X402_PRIVATE_KEY` | — |
 | `replay.cache_store` | `X402_REPLAY_CACHE` | default cache store |
+| `response_cache.cache_store` | `X402_RESPONSE_CACHE_STORE` | default cache store (used by the `x402.cache` middleware) |
+| `response_cache.ttl` | `X402_RESPONSE_CACHE_TTL` | `3600` (seconds) |
 | `bots.patterns` | _(array \| null)_ | `null` (use built-in list) |
 | `bots.extra_patterns` | _(array)_ | `[]` |
 

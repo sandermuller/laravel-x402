@@ -6,7 +6,7 @@ use Illuminate\Contracts\Config\Repository;
 use X402\Laravel\Support\NetworkRegistry;
 
 it('resolves a configured slug to its CAIP-2 chain id', function (): void {
-    $registry = NetworkRegistry::fromConfig(app(Repository::class));
+    $registry = NetworkRegistry::fromConfig(resolve(Repository::class));
 
     expect($registry->resolve('base'))->toBe('eip155:8453')
         ->and($registry->resolve('polygon'))
@@ -14,7 +14,7 @@ it('resolves a configured slug to its CAIP-2 chain id', function (): void {
 });
 
 it('passes unknown slugs through verbatim', function (): void {
-    $registry = NetworkRegistry::fromConfig(app(Repository::class));
+    $registry = NetworkRegistry::fromConfig(resolve(Repository::class));
 
     expect($registry->resolve('eip155:1234'))->toBe('eip155:1234')
         ->and($registry->resolve('unknown-slug'))
@@ -22,13 +22,13 @@ it('passes unknown slugs through verbatim', function (): void {
 });
 
 it('handles a missing or non-array networks config without crashing', function (): void {
-    config()->set('x402.networks', null);
+    config()->set('x402.networks');
 
-    $registry = NetworkRegistry::fromConfig(app(Repository::class));
+    $registry = NetworkRegistry::fromConfig(resolve(Repository::class));
 
     expect($registry->resolve('base'))->toBe('base')
         ->and($registry->all())
-        ->toBe([]);
+        ->toBeEmpty();
 });
 
 it('binds NetworkRegistry as a container singleton', function (): void {

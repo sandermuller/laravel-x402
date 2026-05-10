@@ -7,7 +7,7 @@ use X402\Laravel\Support\AssetEntry;
 use X402\Laravel\Support\AssetRegistry;
 
 it('parses the default asset block as an entry', function (): void {
-    $registry = AssetRegistry::fromConfig(app(Repository::class));
+    $registry = AssetRegistry::fromConfig(resolve(Repository::class));
 
     expect($registry->defaultSymbol())->toBe('USDC')
         ->and($registry->get('USDC')->address)
@@ -23,7 +23,7 @@ it('parses the default asset block as an entry', function (): void {
 it('returns the default entry when the symbol matches the default but is absent from the assets map', function (): void {
     config()->set('x402.assets', []);
 
-    $registry = AssetRegistry::fromConfig(app(Repository::class));
+    $registry = AssetRegistry::fromConfig(resolve(Repository::class));
 
     expect($registry->has('USDC'))->toBeTrue()
         ->and($registry->get('USDC')->address)
@@ -31,7 +31,7 @@ it('returns the default entry when the symbol matches the default but is absent 
 });
 
 it('throws on unknown symbol with the original error message', function (): void {
-    $registry = AssetRegistry::fromConfig(app(Repository::class));
+    $registry = AssetRegistry::fromConfig(resolve(Repository::class));
 
     expect(fn (): AssetEntry => $registry->get('BOGUS'))
         ->toThrow(RuntimeException::class, 'Unknown x402 asset symbol "BOGUS"');
@@ -42,7 +42,7 @@ it('throws when an asset entry is missing an address', function (): void {
         'PYUSD' => ['decimals' => 6, 'eip712' => ['name' => 'PYUSD', 'version' => '1']],
     ]);
 
-    expect(fn (): AssetRegistry => AssetRegistry::fromConfig(app(Repository::class)))
+    expect(fn (): AssetRegistry => AssetRegistry::fromConfig(resolve(Repository::class)))
         ->toThrow(RuntimeException::class, 'asset "PYUSD" is missing a non-empty `address`');
 });
 
@@ -51,14 +51,14 @@ it('throws when decimals is not an integer', function (): void {
         'PYUSD' => ['address' => '0xpyusd', 'decimals' => '6', 'eip712' => ['name' => 'PYUSD', 'version' => '1']],
     ]);
 
-    expect(fn (): AssetRegistry => AssetRegistry::fromConfig(app(Repository::class)))
+    expect(fn (): AssetRegistry => AssetRegistry::fromConfig(resolve(Repository::class)))
         ->toThrow(RuntimeException::class, 'asset "PYUSD" has non-integer `decimals`');
 });
 
 it('throws when the default x402.asset block is missing entirely', function (): void {
-    config()->set('x402.asset', null);
+    config()->set('x402.asset');
 
-    expect(fn (): AssetRegistry => AssetRegistry::fromConfig(app(Repository::class)))
+    expect(fn (): AssetRegistry => AssetRegistry::fromConfig(resolve(Repository::class)))
         ->toThrow(RuntimeException::class, 'x402.asset config is missing');
 });
 
@@ -76,7 +76,7 @@ it('lists known symbols including the default plus any extras', function (): voi
         ],
     ]);
 
-    $registry = AssetRegistry::fromConfig(app(Repository::class));
+    $registry = AssetRegistry::fromConfig(resolve(Repository::class));
 
     expect($registry->knownSymbols())->toContain('USDC')
         ->and($registry->knownSymbols())->toContain('PYUSD');
@@ -96,7 +96,7 @@ it('lets x402.assets[symbol] override the x402.asset default for the same symbol
         'eip712' => ['name' => 'Override USDC', 'version' => '9'],
     ]);
 
-    $registry = AssetRegistry::fromConfig(app(Repository::class));
+    $registry = AssetRegistry::fromConfig(resolve(Repository::class));
     $entry = $registry->get('USDC');
 
     expect($entry->address)->toBe('0xoverride')

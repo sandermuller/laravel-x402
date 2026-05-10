@@ -65,6 +65,7 @@ use X402\Replay\NonceStoreContract;
 use X402\Schemes\Evm\ExactScheme;
 use X402\Server\BotDetector;
 use X402\Server\PaymentResponseCache;
+use X402\Server\PaymentResponseCacheOptions;
 
 final class X402ServiceProvider extends ServiceProvider
 {
@@ -150,11 +151,7 @@ final class X402ServiceProvider extends ServiceProvider
             // enforced upstream regardless and cannot be opted out of.
             $headerOverride = ConfigReader::stringListOrNull($config, 'x402.response_cache.response_headers');
 
-            $args = [
-                'cache' => new LaravelPsr16Bridge($cache),
-                'responseFactory' => $psr17,
-                'streamFactory' => $psr17,
-                'schemes' => $app->make(SchemeMap::class)->map,
+            $optionArgs = [
                 'version' => Version::from(ConfigReader::string($config, 'x402.version', 'v1')),
                 'ttl' => ConfigReader::int($config, 'x402.response_cache.ttl', 3600),
                 'prefix' => ConfigReader::string($config, 'x402.response_cache.prefix', 'x402:idem:v2:'),
@@ -168,10 +165,16 @@ final class X402ServiceProvider extends ServiceProvider
             ];
 
             if ($headerOverride !== null) {
-                $args['responseHeadersAllowList'] = $headerOverride;
+                $optionArgs['responseHeadersAllowList'] = $headerOverride;
             }
 
-            return new PaymentResponseCache(...$args);
+            return new PaymentResponseCache(
+                cache: new LaravelPsr16Bridge($cache),
+                responseFactory: $psr17,
+                streamFactory: $psr17,
+                schemes: $app->make(SchemeMap::class)->map,
+                options: new PaymentResponseCacheOptions(...$optionArgs),
+            );
         });
     }
 

@@ -24,20 +24,9 @@ use RuntimeException;
 final class AssetRegistry
 {
     /**
-     * @var array<string, AssetEntry>
-     */
-    private array $entries;
-
-    private string $defaultSymbol;
-
-    /**
      * @param  array<string, AssetEntry>  $entries
      */
-    public function __construct(array $entries, string $defaultSymbol)
-    {
-        $this->entries = $entries;
-        $this->defaultSymbol = $defaultSymbol;
-    }
+    public function __construct(private array $entries, private readonly string $defaultSymbol) {}
 
     public static function fromConfig(Repository $config): self
     {

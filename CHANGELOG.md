@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.0 - 2026-05-10
+
+### What's new
+
+- **Bumped `php-x402` to `^0.7.0`.** Transitively unlocks the upstream async-settlement primitives — `SettleResult::pending()`, the `PaymentEnforcer` 202 path, the `X402\Webhook\*` namespace (`WebhookEvent`, `SignatureVerifier`, `WebhookDedupStore` interface), `PaymentRowBuilder::pendingRow()` — and `X402\Client\HdWallet` (BIP-32 with default derivation path `m/44'/60'/0'/0/N`, signs identically to `PrivateKeyWallet`). This release lets adopters consume those classes directly; Laravel-side wiring (route macro for the inbound webhook, a `Cache::add`-backed `WebhookDedupStore` implementation, an `hd` driver-dispatch arm in the wallet binding, `TenantHdWalletResolver` reference) lands in the next minor.
+- **Octane `MiddlewareSpecRegistry` leak fixed.** The registry's `flush()` was being called on `Octane RequestReceived`, wiping boot-time route specs the next request needed — visible as 500s on the second request inside a long-lived worker. Fixed by treating boot-resolved specs as static; request-time mutation is now `@internal`-unsupported.
+- **`MiddlewareSpec::onlyBots()`** fluent flag for parity with the `RequirePaymentFromBots` route macro. Use when you want the bot-only enforcement mode without the macro shorthand.
+- **`x402.network` singular config now wires through to the route-string macros.** Previously a documented default that the `x402:0.01,USDC` shorthand silently ignored — adopters whose env relies on that fallback can now drop the per-route `onNetwork(...)` call.
+
+### Internal
+
+- Service-provider binding for `PaymentResponseCache` was rewritten to consume the new upstream `PaymentResponseCacheOptions` DTO (six optional knobs moved off the constructor). No behaviour change for adopters who let the package wire it.
+- `RequirePayment` now resolves `AssetRegistry`, `NetworkRegistry`, and `BotDetector` via the container instead of inlining the config reads. Container-resolved everywhere in this package; if a downstream test hand-builds `new RequirePayment(...)`, add the three new dependencies (or build through `app(RequirePayment::class)`).
+- New value objects extracted from previously inline code: `Support\AssetRegistry` + `AssetEntry`, `Support\NetworkRegistry`, `Detection\BotPatternConfig`, `Listeners\Support\PaymentIdentity`. All marked `@internal` for now.
+
+### Migration
+
+No public-API change in this adapter; no config-key change, no env-var change, no migration to run. Adopters who construct `X402\Server\PaymentResponseCache` themselves outside this package's service provider must adopt the new `PaymentResponseCacheOptions` DTO — see upstream's [UPGRADING.md `0.6.x → 0.7.0`](https://github.com/sandermuller/php-x402/blob/main/UPGRADING.md).
+
+**Full Changelog**: https://github.com/SanderMuller/laravel-x402/compare/0.6.0...0.7.0
+
 ## 0.6.0 - 2026-05-10
 
 ### What's new
@@ -34,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   $spec = RequirePayment::using('0.01');
   $spec->payTo($address);                      // <-- value discarded; spec unchanged
   Route::get('/x', X)->middleware($spec);
+  
   
   
   ```

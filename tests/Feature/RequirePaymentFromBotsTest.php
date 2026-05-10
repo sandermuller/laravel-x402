@@ -5,9 +5,9 @@ declare(strict_types=1);
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\Route;
 use X402\Facilitator\FacilitatorClient;
-use X402\Laravel\Detection\BotDetector;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 use X402\Laravel\Tests\Stubs\StubFacilitator;
+use X402\Server\BotDetector;
 
 beforeEach(function (): void {
     Route::middleware('x402.bots:0.01,USDC,base')->get('/article', fn () => 'free for humans');

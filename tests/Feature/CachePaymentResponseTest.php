@@ -139,6 +139,45 @@ it('uses the configured cache_store when set', function (): void {
     expect($cache)->toBeInstanceOf(PaymentResponseCache::class);
 });
 
+it('named-route cache scoping shares hits across query-string variants', function (): void {
+    $fake = X402::fake();
+
+    Route::middleware(['x402.cache', (string) RequirePayment::using('0.01')])
+        ->get('/named', fn (): array => ['t' => microtime(true)])
+        ->name('cache.named');
+
+    $header = signedHeaderForCacheTest();
+
+    // Same X-PAYMENT, same named route, different query strings — the
+    // resourceResolver default keys off Route::current()->getName(), so
+    // both retries collapse to the same cache scope.
+    $first = $this->withHeader('X-PAYMENT', $header)->get('/named?ref=a');
+    expect($first->getStatusCode())->toBe(200);
+
+    $second = $this->withHeader('X-PAYMENT', $header)->get('/named?ref=b');
+    expect($second->getStatusCode())->toBe(200)
+        ->and($second->getContent())
+        ->toBe($first->getContent())
+        ->and($fake->settleCalls())
+        ->toHaveCount(1);
+});
+
+it('unnamed routes fall back to the URI path for cache scoping', function (): void {
+    $fake = X402::fake();
+
+    Route::middleware(['x402.cache', (string) RequirePayment::using('0.01')])
+        ->get('/unnamed', fn (): array => ['t' => microtime(true)]);
+
+    $header = signedHeaderForCacheTest();
+
+    $first = $this->withHeader('X-PAYMENT', $header)->get('/unnamed');
+    $second = $this->withHeader('X-PAYMENT', $header)->get('/unnamed');
+
+    expect($second->getContent())->toBe($first->getContent())
+        ->and($fake->settleCalls())
+        ->toHaveCount(1);
+});
+
 it('keeps the response-cache TTL independent of the nonce TTL', function (): void {
     // Sanity check: the binding pulls TTL from x402.response_cache.ttl,
     // so a config override is honoured rather than being silently shared

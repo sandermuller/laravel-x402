@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use X402\Laravel\Detection\BotDetector;
+use X402\Server\BotDetector;
 
 it('returns false for empty user agent', function (): void {
     expect((new BotDetector())->isBot(''))->toBeFalse();

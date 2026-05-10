@@ -9,8 +9,8 @@ use Illuminate\Http\Request;
 use Stringable;
 
 /**
- * Fluent builder for `RequirePayment` / `RequirePaymentFromBots`. Returned
- * by `::using()`, serialised to a Laravel middleware string on cast.
+ * Immutable fluent builder for `RequirePayment` / `RequirePaymentFromBots`.
+ * Returned by `::using()`, serialised to a Laravel middleware string on cast.
  *
  * If only the simple `amount,asset,network` triple is set, the spec
  * stringifies to the legacy `Class:0.01,USDC,base` form (zero overhead, no
@@ -19,17 +19,21 @@ use Stringable;
  * and stringifies to `Class:<token>` — the middleware resolves the spec by
  * token in `handle()`.
  *
+ * Each fluent setter returns a NEW instance — chain the calls or assign the
+ * result; mutating an aliased reference is not supported.
+ *
  * Laravel's router casts middleware list entries to strings, so a Spec is
  * accepted anywhere a middleware string is — no `(string)` needed at the
  * call site.
  */
-final class MiddlewareSpec implements Stringable
+final readonly class MiddlewareSpec implements Stringable
 {
     /**
      * @param  class-string  $middleware  Concrete middleware class this spec resolves to.
+     * @param  ?Closure(Request): bool  $skipWhen
      */
     public function __construct(
-        public readonly string $middleware,
+        public string $middleware,
         public string $amount,
         public string $asset = 'USDC',
         public string $network = 'base',
@@ -40,30 +44,54 @@ final class MiddlewareSpec implements Stringable
 
     public function payTo(string $address): self
     {
-        $this->payTo = $address;
-
-        return $this;
+        return new self(
+            middleware: $this->middleware,
+            amount: $this->amount,
+            asset: $this->asset,
+            network: $this->network,
+            payTo: $address,
+            description: $this->description,
+            skipWhen: $this->skipWhen,
+        );
     }
 
     public function onNetwork(string $slug): self
     {
-        $this->network = $slug;
-
-        return $this;
+        return new self(
+            middleware: $this->middleware,
+            amount: $this->amount,
+            asset: $this->asset,
+            network: $slug,
+            payTo: $this->payTo,
+            description: $this->description,
+            skipWhen: $this->skipWhen,
+        );
     }
 
     public function asAsset(string $symbol): self
     {
-        $this->asset = $symbol;
-
-        return $this;
+        return new self(
+            middleware: $this->middleware,
+            amount: $this->amount,
+            asset: $symbol,
+            network: $this->network,
+            payTo: $this->payTo,
+            description: $this->description,
+            skipWhen: $this->skipWhen,
+        );
     }
 
     public function describing(string $description): self
     {
-        $this->description = $description;
-
-        return $this;
+        return new self(
+            middleware: $this->middleware,
+            amount: $this->amount,
+            asset: $this->asset,
+            network: $this->network,
+            payTo: $this->payTo,
+            description: $description,
+            skipWhen: $this->skipWhen,
+        );
     }
 
     /**
@@ -74,9 +102,15 @@ final class MiddlewareSpec implements Stringable
      */
     public function skipWhen(Closure $predicate): self
     {
-        $this->skipWhen = $predicate;
-
-        return $this;
+        return new self(
+            middleware: $this->middleware,
+            amount: $this->amount,
+            asset: $this->asset,
+            network: $this->network,
+            payTo: $this->payTo,
+            description: $this->description,
+            skipWhen: $predicate,
+        );
     }
 
     public function __toString(): string

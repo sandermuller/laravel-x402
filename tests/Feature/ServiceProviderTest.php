@@ -7,8 +7,8 @@ use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use X402\Client\Wallet;
 use X402\Facilitator\FacilitatorClient;
-use X402\Laravel\Detection\BotDetector;
 use X402\Replay\NonceStoreContract;
+use X402\Server\BotDetector;
 
 it('binds the FacilitatorClient as a singleton', function (): void {
     $a = $this->app->make(FacilitatorClient::class);

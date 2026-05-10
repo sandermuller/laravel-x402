@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace X402\Laravel\Testing;
 
-use PHPUnit\Framework\Assert;
 use X402\Facilitator\DiscoveryPage;
 use X402\Facilitator\DiscoveryQuery;
 use X402\Facilitator\FacilitatorClient;
@@ -13,52 +12,70 @@ use X402\Facilitator\SupportedKinds;
 use X402\Facilitator\VerifyResult;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\PaymentSignature;
+use X402\Testing\FakeFacilitator as UpstreamFakeFacilitator;
 
 /**
- * Test double facilitator. Records every verify/settle call and lets tests
- * configure outcomes — pass/reject without hitting Coinbase or any network.
+ * Test double facilitator. Records every verify/settle call and lets
+ * tests configure outcomes (pass / reject) without hitting Coinbase or
+ * any network.
  *
- * Usage:
- *
- *   $fake = X402::fake();
- *   $this->get('/premium')->assertOk();
- *   $fake->assertSettled('https://example.test/premium');
- *
- * Tweak outcomes:
- *
- *   X402::fake()->rejectVerify('insufficient-funds');
- *   X402::fake()->failSettle('on-chain-revert');
+ * @deprecated since 0.5.0; use {@see UpstreamFakeFacilitator} from
+ *             `sandermuller/php-x402` ^0.5 directly. The implementation
+ *             moved upstream verbatim. This class is now a thin wrapper
+ *             that delegates to the upstream instance and will be
+ *             removed in laravel-x402 0.6.0. Adopter migration: replace
+ *             `use X402\Laravel\Testing\FakeFacilitator` with
+ *             `use X402\Testing\FakeFacilitator` — the API is identical.
  */
-final class FakeFacilitator implements FacilitatorClient
+final readonly class FakeFacilitator implements FacilitatorClient
 {
-    public bool $verifyOk = true;
+    private UpstreamFakeFacilitator $inner;
 
-    public ?string $verifyReason = null;
+    public function __construct()
+    {
+        $this->inner = new UpstreamFakeFacilitator();
+    }
 
-    public bool $settleOk = true;
+    public function rejectVerify(string $reason = 'rejected'): self
+    {
+        $this->inner->rejectVerify($reason);
 
-    public ?string $settleReason = null;
+        return $this;
+    }
 
-    public string $payer = '0xpayer';
+    public function failSettle(string $reason = 'settlement-failed'): self
+    {
+        $this->inner->failSettle($reason);
 
-    public string $transaction = '0xtxhash';
+        return $this;
+    }
 
-    /**
-     * @var list<array{signature: PaymentSignature, challenge: PaymentRequired}>
-     */
-    private array $verifyCalls = [];
+    public function verify(PaymentSignature $signature, PaymentRequired $challenge): VerifyResult
+    {
+        return $this->inner->verify($signature, $challenge);
+    }
 
-    /**
-     * @var list<array{signature: PaymentSignature, challenge: PaymentRequired}>
-     */
-    private array $settleCalls = [];
+    public function settle(PaymentSignature $signature, PaymentRequired $challenge): SettleResult
+    {
+        return $this->inner->settle($signature, $challenge);
+    }
+
+    public function supported(): SupportedKinds
+    {
+        return $this->inner->supported();
+    }
+
+    public function discoverResources(DiscoveryQuery $query = new DiscoveryQuery()): DiscoveryPage
+    {
+        return $this->inner->discoverResources($query);
+    }
 
     /**
      * @return list<array{signature: PaymentSignature, challenge: PaymentRequired}>
      */
     public function verifyCalls(): array
     {
-        return $this->verifyCalls;
+        return $this->inner->verifyCalls();
     }
 
     /**
@@ -66,87 +83,21 @@ final class FakeFacilitator implements FacilitatorClient
      */
     public function settleCalls(): array
     {
-        return $this->settleCalls;
-    }
-
-    public function rejectVerify(string $reason = 'rejected'): self
-    {
-        $this->verifyOk = false;
-        $this->verifyReason = $reason;
-
-        return $this;
-    }
-
-    public function failSettle(string $reason = 'settlement-failed'): self
-    {
-        $this->settleOk = false;
-        $this->settleReason = $reason;
-
-        return $this;
-    }
-
-    public function verify(PaymentSignature $signature, PaymentRequired $challenge): VerifyResult
-    {
-        $this->verifyCalls[] = ['signature' => $signature, 'challenge' => $challenge];
-
-        return new VerifyResult(
-            isValid: $this->verifyOk,
-            invalidReason: $this->verifyOk ? null : ($this->verifyReason ?? 'rejected'),
-            payer: $this->payer,
-        );
-    }
-
-    public function settle(PaymentSignature $signature, PaymentRequired $challenge): SettleResult
-    {
-        $this->settleCalls[] = ['signature' => $signature, 'challenge' => $challenge];
-
-        return new SettleResult(
-            success: $this->settleOk,
-            transaction: $this->settleOk ? $this->transaction : '',
-            network: $challenge->network,
-            payer: $this->payer,
-            errorReason: $this->settleOk ? null : ($this->settleReason ?? 'settlement-failed'),
-        );
-    }
-
-    public function supported(): SupportedKinds
-    {
-        return new SupportedKinds(kinds: []);
-    }
-
-    public function discoverResources(DiscoveryQuery $query = new DiscoveryQuery()): DiscoveryPage
-    {
-        return new DiscoveryPage(items: [], limit: $query->limit, offset: $query->offset, total: 0);
+        return $this->inner->settleCalls();
     }
 
     public function assertVerified(?string $resource = null): void
     {
-        Assert::assertNotEmpty($this->verifyCalls, 'Expected facilitator->verify to be called.');
-
-        if ($resource !== null) {
-            $hit = array_filter(
-                $this->verifyCalls,
-                static fn (array $call): bool => $call['challenge']->resource === $resource,
-            );
-            Assert::assertNotEmpty($hit, sprintf('Expected verify for resource "%s".', $resource));
-        }
+        $this->inner->assertVerified($resource);
     }
 
     public function assertSettled(?string $resource = null): void
     {
-        Assert::assertNotEmpty($this->settleCalls, 'Expected facilitator->settle to be called.');
-
-        if ($resource !== null) {
-            $hit = array_filter(
-                $this->settleCalls,
-                static fn (array $call): bool => $call['challenge']->resource === $resource,
-            );
-            Assert::assertNotEmpty($hit, sprintf('Expected settle for resource "%s".', $resource));
-        }
+        $this->inner->assertSettled($resource);
     }
 
     public function assertNothingSettled(): void
     {
-        Assert::assertEmpty($this->settleCalls, 'Expected no settlement calls.');
+        $this->inner->assertNothingSettled();
     }
 }

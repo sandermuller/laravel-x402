@@ -8,8 +8,8 @@ use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use X402\Laravel\Contracts\Priceable;
-use X402\Laravel\Detection\BotDetector;
 use X402\Laravel\Support\EnforcementPolicy;
+use X402\Server\BotDetector;
 
 /**
  * Same wire behaviour as `RequirePayment`, but only kicks in when the request

@@ -14,11 +14,13 @@ use Illuminate\Http\Client\Factory as HttpFactory;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
+use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use RuntimeException;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
@@ -36,20 +38,27 @@ use X402\Laravel\Client\HttpClientMacro;
 use X402\Laravel\Client\WalletResolver;
 use X402\Laravel\Console\InstallCommand;
 use X402\Laravel\Console\ListRoutesCommand;
+use X402\Laravel\Console\PrunePaymentsCommand;
 use X402\Laravel\Console\TestPaymentCommand;
 use X402\Laravel\Console\VerifyConfigCommand;
-use X402\Laravel\Detection\BotDetector;
+use X402\Laravel\Detection\BotDetector as DeprecatedBotDetector;
+use X402\Laravel\Events\PaymentRejected;
+use X402\Laravel\Events\PaymentSettled;
 use X402\Laravel\Facilitator\DispatchingFacilitator;
 use X402\Laravel\Http\Middleware\CachePaymentResponse;
 use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
+use X402\Laravel\Listeners\RecordPayment;
+use X402\Laravel\Listeners\RecordPaymentQueued;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
+use X402\Laravel\Support\PaymentContextRegistry;
 use X402\Laravel\Support\SchemeMap;
 use X402\Protocol\Version;
 use X402\Replay\NonceStoreContract;
 use X402\Schemes\Evm\ExactScheme;
+use X402\Server\BotDetector;
 use X402\Server\PaymentResponseCache;
 
 final class X402ServiceProvider extends ServiceProvider
@@ -59,6 +68,7 @@ final class X402ServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/x402.php', 'x402');
 
         $this->app->singleton(EnforcementPolicy::class, fn (): EnforcementPolicy => new EnforcementPolicy());
+        $this->app->singleton(PaymentContextRegistry::class, fn (): PaymentContextRegistry => new PaymentContextRegistry());
 
         $this->registerPsrFactories();
         $this->registerSchemes();
@@ -133,7 +143,14 @@ final class X402ServiceProvider extends ServiceProvider
                 'schemes' => $app->make(SchemeMap::class)->map,
                 'version' => Version::from(ConfigReader::string($config, 'x402.version', 'v1')),
                 'ttl' => ConfigReader::int($config, 'x402.response_cache.ttl', 3600),
-                'prefix' => ConfigReader::string($config, 'x402.response_cache.prefix', 'x402:idem:'),
+                'prefix' => ConfigReader::string($config, 'x402.response_cache.prefix', 'x402:idem:v2:'),
+                // Route-aware cache scoping: prefer the matched route name
+                // (stable across query-string variants) and fall back to the
+                // raw URI path when the route is unnamed. Adopters who name
+                // pricing-equivalent routes share cached responses across
+                // them — call out in README's `x402.cache` recipe.
+                'resourceResolver' => static fn (ServerRequestInterface $r): string => Route::current()?->getName()
+                        ?? $r->getUri()->getPath(),
             ];
 
             if ($headerOverride !== null) {
@@ -178,6 +195,8 @@ final class X402ServiceProvider extends ServiceProvider
         $this->app->singleton(FacilitatorClient::class, fn (Application $app): FacilitatorClient => new DispatchingFacilitator(
             inner: $app->make(CoinbaseFacilitator::class),
             events: $app->make(Dispatcher::class),
+            context: $app->make(PaymentContextRegistry::class),
+            container: $app,
         ));
     }
 
@@ -189,7 +208,7 @@ final class X402ServiceProvider extends ServiceProvider
      */
     private function registerBotDetector(): void
     {
-        $this->app->bind(BotDetector::class, function (Application $app): BotDetector {
+        $factory = static function (Application $app): BotDetector {
             /** @var array<string, BotDetector> $cache */
             static $cache = [];
 
@@ -203,6 +222,20 @@ final class X402ServiceProvider extends ServiceProvider
                 . '|E' . count($extra) . ':' . hash('xxh3', implode("\0", $extra));
 
             return $cache[$key] ??= new BotDetector($patterns, $extra);
+        };
+
+        $this->app->bind(BotDetector::class, $factory);
+
+        // BC alias-shim: adopters who type-hint the deprecated local FQCN
+        // continue to receive a working detector. The wrapper has the same
+        // public API as the upstream class and delegates internally; drop
+        // in 0.6.0 along with src/Detection/BotDetector.php.
+        $this->app->bind(DeprecatedBotDetector::class, function (Application $app): DeprecatedBotDetector {
+            $config = $app->make(Repository::class);
+            $patterns = ConfigReader::stringListOrNull($config, 'x402.bots.patterns');
+            $extra = ConfigReader::stringListOrNull($config, 'x402.bots.extra_patterns') ?? [];
+
+            return new DeprecatedBotDetector($patterns, $extra);
         });
     }
 
@@ -227,6 +260,10 @@ final class X402ServiceProvider extends ServiceProvider
             __DIR__ . '/../config/x402.php' => $this->app->configPath('x402.php'),
         ], 'x402-config');
 
+        $this->publishes([
+            __DIR__ . '/../database/migrations/2026_01_01_000000_create_x402_payments_table.php' => $this->app->databasePath('migrations/' . date('Y_m_d_His') . '_create_x402_payments_table.php'),
+        ], 'x402-migrations');
+
         $router = $this->app->make(Router::class);
         $router->aliasMiddleware('x402', RequirePayment::class);
         $router->aliasMiddleware('x402.bots', RequirePaymentFromBots::class);
@@ -243,6 +280,7 @@ final class X402ServiceProvider extends ServiceProvider
         });
 
         $this->registerRateLimiter();
+        $this->registerHistoryListener();
         $this->registerOctaneIntegration();
 
         if ($this->app->runningInConsole()) {
@@ -251,8 +289,38 @@ final class X402ServiceProvider extends ServiceProvider
                 VerifyConfigCommand::class,
                 TestPaymentCommand::class,
                 ListRoutesCommand::class,
+                PrunePaymentsCommand::class,
             ]);
         }
+    }
+
+    /**
+     * Wire the default `RecordPayment` listener into the framework
+     * dispatcher when `config('x402.history.enabled')` is true. Sync by
+     * default; switches to {@see RecordPaymentQueued} when a non-empty
+     * queue name is configured.
+     *
+     * Hosts that disable history (the default) pay zero — no listener,
+     * no DB lookup, no migration consumer.
+     */
+    private function registerHistoryListener(): void
+    {
+        $config = $this->app->make(Repository::class);
+
+        if (! (bool) $config->get('x402.history.enabled', false)) {
+            return;
+        }
+
+        $queue = ConfigReader::stringOrNull($config, 'x402.history.queue');
+        $listenerClass = $queue !== null && $queue !== '' ? RecordPaymentQueued::class : RecordPayment::class;
+
+        if ($listenerClass === RecordPaymentQueued::class) {
+            $this->app->bind(RecordPaymentQueued::class, fn (): RecordPaymentQueued => new RecordPaymentQueued((string) $queue));
+        }
+
+        $events = $this->app->make(Dispatcher::class);
+        $events->listen(PaymentSettled::class, [$listenerClass, 'handleSettled']);
+        $events->listen(PaymentRejected::class, [$listenerClass, 'handleRejected']);
     }
 
     /**
@@ -295,11 +363,14 @@ final class X402ServiceProvider extends ServiceProvider
 
         $events = $this->app->make(Dispatcher::class);
         $policy = $this->app->make(EnforcementPolicy::class);
+        $context = $this->app->make(PaymentContextRegistry::class);
 
         $policy->snapshot();
+        $context->snapshot();
 
-        $events->listen('Laravel\\Octane\\Events\\RequestReceived', static function () use ($policy): void {
+        $events->listen('Laravel\\Octane\\Events\\RequestReceived', static function () use ($policy, $context): void {
             $policy->restoreSnapshot();
+            $context->restoreSnapshot();
             MiddlewareSpecRegistry::flush();
         });
     }

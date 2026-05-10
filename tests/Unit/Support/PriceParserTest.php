@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-use X402\Laravel\Support\PriceParser;
+use X402\Support\PriceParser;
 
 it('converts whole units to atomic with USDC decimals', function (): void {
     expect(PriceParser::toAtomic('1', 6))->toBe('1000000');

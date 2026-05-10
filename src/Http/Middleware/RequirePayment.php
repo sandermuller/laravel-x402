@@ -18,12 +18,12 @@ use X402\Facilitator\FacilitatorClient;
 use X402\Laravel\Server\EloquentPriceTable;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
-use X402\Laravel\Support\PriceParser;
 use X402\Laravel\Support\SchemeMap;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\Version;
 use X402\Replay\NonceStoreContract;
 use X402\Server\PaymentEnforcer;
+use X402\Support\PriceParser;
 
 /**
  * Laravel route middleware adapter — wraps the framework-agnostic

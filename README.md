@@ -8,16 +8,16 @@ HTTP 402 stablecoin payments for Laravel routes.
 ```php
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 
-// Free for humans, $0.001 USDC for AI agents.
+// Free for humans, 0.001 USDC for AI agents.
 Route::get('/articles/{article}', ArticleController::class)
     ->middleware(RequirePaymentFromBots::using('0.001'));
 ```
 
 Implements the [x402 payment protocol](https://www.x402.org/) on top of
-[`sandermuller/php-x402`](https://github.com/sandermuller/php-x402)
-(framework-agnostic core). Charge per HTTP request in USDC, vary the price
-per resource, gate AI agents while keeping content free for humans, or pay
-upstream APIs automatically via `Http::withX402()`.
+[`sandermuller/php-x402`](https://github.com/sandermuller/php-x402), the
+framework-agnostic core. You can charge per HTTP request in USDC, vary the
+price per resource, gate AI agents while leaving content free for humans,
+or pay upstream APIs automatically via `Http::withX402()`.
 
 > [!NOTE]
 > **Status:** alpha. Public API may shift before `v1.0`.
@@ -51,7 +51,7 @@ X402_PRIVATE_KEY=0x...   # only needed for Http::withX402()
 
 ## Recipes
 
-### Gate a route — flat price
+### Gate a route (flat price)
 
 ```php
 use X402\Laravel\Http\Middleware\RequirePayment;
@@ -64,7 +64,7 @@ Route::get('/premium', PremiumController::class)
 `->middleware('x402:0.01,USDC,base')` works too — the named middleware
 alias is registered for both `x402` and `x402.bots`.
 
-### Per-route overrides — fluent builder
+### Per-route overrides (fluent builder)
 
 ```php
 Route::get('/premium', PremiumController::class)
@@ -87,10 +87,14 @@ Available overrides:
 | `->describing($text)` | Custom challenge description (otherwise auto-generated). |
 | `->skipWhen($predicate)` | Per-route skip. Returning `true` bypasses enforcement for this route only. |
 
+> [!NOTE]
+> The spec is immutable; fluent setters return a new instance. Chain the
+> calls or assign the result. Mutating an aliased reference does nothing.
+
 > [!WARNING]
-> When any override is set, the spec serialises to a registry token. This
-> form does **not** survive `route:cache` — cache the routes after the
-> route file evaluates, or restrict cached routes to the legacy
+> When any override is set, the spec serialises to a registry token. The
+> token form does **not** survive `route:cache`, so either cache the routes
+> after the route file evaluates, or keep cached routes on the legacy
 > `amount,asset,network` form.
 
 ### Variable price per resource
@@ -115,13 +119,12 @@ Route::get('/articles/{article}', ArticleController::class)
 ```
 
 > [!IMPORTANT]
-> `Priceable` resolution requires Laravel's `SubstituteBindings` middleware
-> to be in the route's chain — otherwise route parameters are still raw
-> scalars and the price silently falls back to the base amount. The `web`
-> group includes it by default; for API-only routes, add it explicitly.
-> Laravel's middleware-priority list orders `SubstituteBindings` ahead of
-> named middleware automatically, so declaration order doesn't matter as
-> long as it's present.
+> `Priceable` resolution needs Laravel's `SubstituteBindings` middleware in
+> the route's chain. Without it, route parameters stay as raw scalars and
+> the price quietly falls back to the base amount. The `web` group includes
+> it by default; on API-only routes add it explicitly. Laravel's middleware-
+> priority list orders `SubstituteBindings` ahead of named middleware
+> automatically, so declaration order doesn't matter as long as it's there.
 
 When a route binds multiple `Priceable` parameters
 (`/articles/{article}/extras/{extra}`), the first one in iteration order
@@ -146,8 +149,8 @@ Route::get('/articles/{article}', ArticleController::class)
 ```
 
 User-Agent matched against a curated list (see
-`X402\Laravel\Detection\BotDetector`). Override or extend in
-`config/x402.php`:
+`X402\Server\BotDetector` from `sandermuller/php-x402`). Override or
+extend in `config/x402.php`:
 
 ```php
 'bots' => [
@@ -159,7 +162,7 @@ User-Agent matched against a curated list (see
 Composes with `Priceable` (bots pay the model's price) and the builder
 (`->skipWhen()`, `->payTo()`, etc. apply once the bot check passes).
 
-### Skip enforcement globally — grace cache, IP allowlist, plan tier
+### Skip enforcement globally (grace cache, IP allowlist, plan tier)
 
 ```php
 use Illuminate\Http\Request;
@@ -176,15 +179,15 @@ nonce claim, no facilitator round-trip.
 
 > [!WARNING]
 > Call `enforceWhen` once, from a service provider's `boot()`. The
-> predicate is stored on a process-global singleton; calling it from a
-> controller, job, or middleware will mutate enforcement for *all*
-> subsequent requests in long-lived workers (Octane, RoadRunner). Per-
-> request logic belongs *inside* the closure, which receives the current
-> Request. The package automatically restores the boot-time predicate on
-> every Octane `RequestReceived` event when Octane is installed.
+> predicate is stored on a process-global singleton, so calling it from a
+> controller, job, or middleware mutates enforcement for *all* subsequent
+> requests under long-lived workers (Octane, RoadRunner). Put per-request
+> logic *inside* the closure, which receives the current Request. The
+> package restores the boot-time predicate on every Octane
+> `RequestReceived` event when Octane is installed.
 
-For per-route skipping, prefer `->skipWhen()` on the builder — it's
-scoped, doesn't touch global state, and survives Octane.
+For per-route skipping, prefer `->skipWhen()` on the builder. It's scoped,
+doesn't touch global state, and survives Octane.
 
 ### Read the settle receipt in your controller
 
@@ -207,7 +210,7 @@ caller was a human).
 
 ### Throttle unpaid 402 floods
 
-The package registers a `throttle:x402` named rate limiter — 60 requests
+The package registers a `throttle:x402` named rate limiter at 60 requests
 per IP per minute by default. Apply it before the payment middleware so
 unsigned requests don't tie up facilitator capacity:
 
@@ -230,9 +233,9 @@ RateLimiter::for('x402', fn (Request $r) => Limit::perMinute(120)->by($r->ip()))
 $response = Http::withX402()->get('https://api.example.com/data');
 ```
 
-Wallet key resolved from `config/x402.php` (`X402_PRIVATE_KEY`). Signs a
-fresh authorization for each request the upstream returns 402 on, then
-retries with `X-PAYMENT`.
+The wallet key comes from `config/x402.php` (`X402_PRIVATE_KEY`). On any
+upstream 402 the macro signs a fresh authorization, retries with
+`X-PAYMENT`, and returns the second response.
 
 For per-tenant or per-request wallet selection (HD wallet derivation,
 KMS-backed signers, multi-tenant SaaS), bind a custom resolver and
@@ -250,7 +253,110 @@ The `$context` is forwarded onto every `OutboundPaymentSent` event so
 listeners can attribute spend back to a tenant, job, or correlation id
 without parsing the URL.
 
-### Idempotent paid responses — replay-on-retry
+### Payment history
+
+Opt-in (since 0.5.0). An Eloquent listener records every settled and
+rejected payment to a publishable `x402_payments` table. Off by default;
+enable in two steps:
+
+```bash
+php artisan vendor:publish --tag=x402-migrations
+php artisan migrate
+```
+
+```php
+// config/x402.php
+'history' => [
+    'enabled' => env('X402_HISTORY', true),
+    'queue' => env('X402_HISTORY_QUEUE', null), // null = sync; set a queue name to defer
+    'connection' => null,                        // separate analytics DB if you want one
+    'table' => 'x402_payments',
+],
+```
+
+```php
+use X402\Laravel\Models\Payment;
+
+Payment::settled()->where('payer', '0xalice')->latest()->take(10)->get();
+Payment::rejected()->whereBetween('created_at', [$from, $to])->count();
+```
+
+Columns: `id` (ULID), `status`, `resource`, `payer`, `pay_to`,
+`amount` (atomic units, big-int string), `asset`, `network`,
+`transaction`, `nonce`, `reason`, `extensions` (json), `meta` (json),
+`settled_at`, plus the standard timestamps. Writes are idempotent on
+`transaction` and `nonce`: a retry through the `x402.cache` middleware
+updates the existing row instead of inserting a duplicate.
+
+#### Attach per-request context (`tenant_id`, `user_id`, `request_id`)
+
+Register a closure once in a service provider's `boot()`. The closure
+runs while the live `Request` is still in scope; the returned array
+lands in the `meta` column on every history row, and rides queue
+serialisation if you switch the listener to async.
+
+```php
+use Illuminate\Http\Request;
+use X402\Laravel\Facades\X402;
+
+X402::capturePaymentContext(fn (Request $r): array => [
+    'user_id' => $r->user()?->id,
+    'tenant_id' => $r->user()?->tenant_id,
+    'request_id' => $r->headers->get('X-Request-Id'),
+]);
+```
+
+#### Rewrite the `resource` for high-cardinality routes
+
+Storing the full URL on `/articles/{id}` blows up cardinality fast.
+Register a formatter to stash a route name (or any stable identifier)
+instead:
+
+```php
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use X402\Laravel\Facades\X402;
+
+X402::resourceFormatter(function (string $url): string {
+    try {
+        return Route::getRoutes()->match(Request::create($url))->getName() ?? $url;
+    } catch (NotFoundHttpException) {
+        return $url;
+    }
+});
+```
+
+The formatter receives a URL string, not a live `Request`, so it
+survives queue serialisation and the async-webhook dispatch path. The
+`try/catch` is mandatory: `Route::getRoutes()->match()` throws when no
+route matches (which happens on URLs that came in via the async-webhook
+path), and an unhandled throw inside the formatter breaks event emission.
+
+> [!NOTE]
+> Hosts adding `belongsTo` relations (`User`, `Tenant`) extend the
+> `X402\Laravel\Models\Payment` model in their own namespace. The
+> shipped model is `final` for the read path; for relation work,
+> compose via Eloquent global scopes or query the table directly.
+
+#### Prune the `rejected` flood
+
+Failed verifies on a public endpoint accumulate fast. The shipped
+pruner is bounded — it deletes rows older than a window:
+
+```bash
+php artisan x402:prune --before=30days --status=rejected
+php artisan x402:prune --before=2026-01-01 --status=settled
+php artisan x402:prune --before=7days --dry-run
+```
+
+Schedule it from `app/Console/Kernel.php`:
+
+```php
+$schedule->command('x402:prune --before=30days --status=rejected')->daily();
+```
+
+### Idempotent paid responses (replay-on-retry)
 
 If a client's connection drops between facilitator-settle and the
 response landing, the same signed authorization can be retried — but
@@ -265,18 +371,31 @@ Route::middleware([
 ])->get('/premium', PremiumController::class);
 ```
 
-Cache key is `(network, from, nonce, signature bytes)` — a forged
-signature with the same nonce does not replay. TTL defaults to 1 hour
-and must comfortably exceed the replay window (`X402_RESPONSE_CACHE_TTL`).
+Cache key: `(network, from, nonce, signature bytes, method, resource)`. A
+forged signature with the same nonce will not replay, and a retry against
+a different route (or method) cannot reuse another route's cached
+response. TTL defaults to 1 hour; it has to exceed the replay window
+(`X402_RESPONSE_CACHE_TTL`).
 
-**What's stored.** Only the response status, body, and a safe-by-default
-header allow-list (`Content-Type`, `Content-Length`, `Cache-Control`,
-`ETag`, `Last-Modified`, `Location`, the `PAYMENT-RESPONSE` receipt, …).
-`Set-Cookie`, `Authorization`, `Proxy-Authorization`, `Www-Authenticate`,
-and `Cookie` are **always dropped** — anyone replaying a stolen
-`X-PAYMENT` header would otherwise inherit the original buyer's
-session. Hosts that need additional headers in the cached snapshot can
-extend the allow-list:
+> [!NOTE]
+> Cache scope is route-name-aware since 0.5.0. The service-provider
+> binding passes a `resourceResolver:` closure that prefers
+> `Route::current()?->getName()` over the raw URI path, so two retries
+> against the same named route share cached responses across different
+> query strings (which is normally what you want). Pricing-equivalent
+> named routes share the same scope by design. If `articles.show` charges
+> differently per query parameter, either rebind `PaymentResponseCache`
+> without the resolver in your service provider, or split the routes so
+> each pricing surface has its own name.
+
+The cache stores the response status, body, and a safe-by-default header
+allow-list (`Content-Type`, `Content-Length`, `Cache-Control`, `ETag`,
+`Last-Modified`, `Location`, the `PAYMENT-RESPONSE` receipt, plus a few
+others). `Set-Cookie`, `Authorization`, `Proxy-Authorization`,
+`Www-Authenticate`, and `Cookie` are always dropped: anyone replaying a
+stolen `X-PAYMENT` header would otherwise inherit the original buyer's
+session. Hosts that need extra headers in the cached snapshot can extend
+the allow-list:
 
 ```php
 // config/x402.php
@@ -293,14 +412,14 @@ extend the allow-list:
 ],
 ```
 
-The hard-block list is enforced regardless of what's added here.
+The hard-block list applies regardless of what you add.
 
-**What's skipped.** Range / partial / negotiated responses bypass the
-idempotent cache and run fresh on each retry — the `Vary`, `Content-Range`,
-`Content-Encoding`, `Accept-Ranges` headers and `206 Partial Content`
-trigger a skip. Streaming responses (`StreamedResponse` / `BinaryFileResponse`)
-should not be stacked behind `x402.cache`; the cache only helps when the
-controller returns a fully-buffered body.
+What gets skipped: range, partial, and negotiated responses bypass the
+cache and run fresh on each retry. Any of `Vary`, `Content-Range`,
+`Content-Encoding`, `Accept-Ranges`, or a `206 Partial Content` status
+triggers the skip. Don't stack `x402.cache` behind streaming responses
+(`StreamedResponse` / `BinaryFileResponse`); the cache only helps when
+the controller returns a fully-buffered body.
 
 ## Events
 
@@ -309,8 +428,8 @@ record receipts, alert on failures, or hand work off to a queue.
 
 | Event | Fires when | Payload |
 |---|---|---|
-| `X402\Laravel\Events\PaymentSettled` | Facilitator settles an inbound payment | `SettleResult $result`, `string $resource` |
-| `X402\Laravel\Events\PaymentRejected` | Facilitator rejects verify, or settle fails | `string $reason`, `string $resource` |
+| `X402\Laravel\Events\PaymentSettled` | Facilitator settles an inbound payment | `SettleResult $result`, `string $resource`, `?PaymentRequired $challenge`, `?PaymentSignature $signature`, `array $context` |
+| `X402\Laravel\Events\PaymentRejected` | Facilitator rejects verify, or settle fails | `string $reason`, `string $resource`, `?PaymentRequired $challenge`, `?PaymentSignature $signature`, `array $context` |
 | `X402\Laravel\Events\OutboundPaymentSent` | `Http::withX402()` countersigns a 402 challenge and retries | `string $url`, `string $amount`, `string $asset`, `string $network`, `string $payTo`, `mixed $context` |
 
 ```php
@@ -367,6 +486,7 @@ alongside.
 | `php artisan x402:verify-config` | Validate config, resolve the wallet, report missing values. Pass `--ping` to additionally probe the configured facilitator URL with the configured auth headers. |
 | `php artisan x402:list-routes` | Tabulate every route guarded by `RequirePayment` / `RequirePaymentFromBots` with its amount, network, asset, and per-route overrides. |
 | `php artisan x402:test-payment {url}` | Send a test request through `Http::withX402()` and report the settlement. Flags: `--simulate-bot=GPTBot/1.0` to test the bots middleware, `--ping` for an unsigned request that just reports the 402 challenge, `--json` for machine-readable output. |
+| `php artisan x402:prune` | Delete `x402_payments` rows older than the window. Flags: `--before=30days` (relative) or `--before=2026-01-01` (absolute), `--status=settled\|rejected`, `--dry-run` to preview. |
 
 ## Configuration
 
@@ -384,8 +504,13 @@ The most-set keys (see `config/x402.php` for the full reference):
 | `replay.cache_store` | `X402_REPLAY_CACHE` | default cache store |
 | `response_cache.cache_store` | `X402_RESPONSE_CACHE_STORE` | default cache store (used by the `x402.cache` middleware) |
 | `response_cache.ttl` | `X402_RESPONSE_CACHE_TTL` | `3600` (seconds) |
+| `response_cache.prefix` | _(string)_ | `x402:idem:v2:` (bumped from `v1` in 0.5.0 — adopters with custom prefixes should bump too; see [UPGRADING.md](UPGRADING.md)) |
 | `bots.patterns` | _(array \| null)_ | `null` (use built-in list) |
 | `bots.extra_patterns` | _(array)_ | `[]` |
+| `history.enabled` | `X402_HISTORY` | `false` (opt-in payment-history persistence) |
+| `history.queue` | `X402_HISTORY_QUEUE` | `null` (sync; set a queue name to defer writes) |
+| `history.connection` | `X402_HISTORY_CONNECTION` | `null` (default DB connection) |
+| `history.table` | `X402_HISTORY_TABLE` | `x402_payments` |
 
 Custom networks and assets are picked up at request time — no rebuild
 required. Supply your own:
@@ -420,6 +545,14 @@ For [`laravel/mcp`](https://github.com/laravel/mcp) integration, install
 
 See [GitHub Releases](https://github.com/sandermuller/laravel-x402/releases)
 for the version history, or [CHANGELOG.md](CHANGELOG.md).
+
+## Upgrading
+
+Breaking changes between minor versions live in
+[UPGRADING.md](UPGRADING.md). `0.5.0` ships two source-level breaks
+(`MiddlewareSpec` immutability and the `PaymentSettled` / `PaymentRejected`
+constructor expansion) plus the `php-x402 ^0.4` cache-prefix migration.
+Check the doc before bumping.
 
 ## Security
 

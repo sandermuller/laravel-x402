@@ -42,6 +42,38 @@ parameters:
             identifier: trait.unused
             reportUnmatched: false
 
+        # Eloquent\Builder is the canonical return for query helpers; the
+        # generic parameter (Builder<self>) lives in PHPDoc since PHP has
+        # no native generic return syntax. typePerfect's "more specific"
+        # demand is unsatisfiable for this case.
+        -
+            identifier: typePerfect.narrowReturnObjectType
+            path: src/Models/
+            reportUnmatched: false
+
+        # The service-provider intentionally references the
+        # `X402\Laravel\Detection\BotDetector` deprecated class to wire
+        # its alias-shim binding. The wrapper class file (src/Detection/
+        # BotDetector.php) is the deprecation shim itself and similarly
+        # references upstream classes by design. Both BC affordances drop
+        # in 0.6.0 along with the deprecated class.
+        -
+            identifier: classConstant.deprecatedClass
+            path: src/X402ServiceProvider.php
+            reportUnmatched: false
+        -
+            identifier: method.deprecatedClass
+            path: src/X402ServiceProvider.php
+            reportUnmatched: false
+        -
+            identifier: new.deprecatedClass
+            path: src/X402ServiceProvider.php
+            reportUnmatched: false
+        -
+            identifier: return.deprecatedClass
+            path: src/X402ServiceProvider.php
+            reportUnmatched: false
+
         -
             identifier: method.notFound
             path: tests/

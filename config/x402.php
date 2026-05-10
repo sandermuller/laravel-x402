@@ -157,7 +157,12 @@ return [
     'response_cache' => [
         'cache_store' => env('X402_RESPONSE_CACHE_STORE', null), // null = default cache store
         'ttl' => (int) env('X402_RESPONSE_CACHE_TTL', 3600),
-        'prefix' => 'x402:idem:',
+        // Bumped to v2 in laravel-x402 0.5.0 — php-x402 0.4.0 changed the
+        // IdempotencyKeyBuilder shape (json_encode + [method, resource]
+        // mix-in) so 0.3.x snapshots are unreadable on 0.4 reads. The
+        // prefix bump leaves stale entries to TTL-evict naturally instead
+        // of polluting the new keyspace.
+        'prefix' => 'x402:idem:v2:',
 
         /*
         | Optional: extend the response-header allow-list applied to the
@@ -214,6 +219,34 @@ return [
 
     'rate_limit' => [
         'per_minute' => (int) env('X402_RATE_LIMIT_PER_MINUTE', 60),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Payment history persistence
+    |--------------------------------------------------------------------------
+    |
+    | Off by default — opt in by setting `X402_HISTORY=true` AND publishing
+    | the migration: `php artisan vendor:publish --tag=x402-migrations`.
+    |
+    | When enabled, the package's RecordPayment listener writes a row to
+    | `x402_payments` for every PaymentSettled / PaymentRejected event.
+    | Rows survive the request boundary and queue serialisation so hosts
+    | get a durable audit trail with no glue code.
+    |
+    | - "queue": dispatch the listener on a named queue. Null = sync (write
+    |   happens in the request lifecycle; failures bubble up immediately).
+    |   Set to a queue name to defer the write — recommended for p99-
+    |   sensitive endpoints.
+    | - "connection": separate analytics DB. Null = default connection.
+    | - "table": override the table name. Match the migration.
+    */
+
+    'history' => [
+        'enabled' => (bool) env('X402_HISTORY', false),
+        'queue' => env('X402_HISTORY_QUEUE'),
+        'connection' => env('X402_HISTORY_CONNECTION'),
+        'table' => env('X402_HISTORY_TABLE', 'x402_payments'),
     ],
 
 ];

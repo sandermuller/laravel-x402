@@ -12,6 +12,7 @@ use X402\Facilitator\VerifyResult;
 use X402\Laravel\Events\PaymentRejected;
 use X402\Laravel\Events\PaymentSettled;
 use X402\Laravel\Facilitator\DispatchingFacilitator;
+use X402\Laravel\Support\PaymentContextRegistry;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\PaymentSignature;
 
@@ -75,7 +76,7 @@ it('emits PaymentRejected and rethrows when inner verify() throws', function ():
         }
     };
 
-    $facilitator = new DispatchingFacilitator($inner, $events);
+    $facilitator = new DispatchingFacilitator($inner, $events, new PaymentContextRegistry());
 
     expect(fn () => $facilitator->verify(dispatchingSignature(), dispatchingChallenge()))
         ->toThrow(RuntimeException::class, 'connection refused')
@@ -118,7 +119,7 @@ it('emits PaymentRejected and rethrows when inner settle() throws', function ():
         }
     };
 
-    $facilitator = new DispatchingFacilitator($inner, $events);
+    $facilitator = new DispatchingFacilitator($inner, $events, new PaymentContextRegistry());
 
     expect(fn () => $facilitator->settle(dispatchingSignature(), dispatchingChallenge()))
         ->toThrow(RuntimeException::class, 'rpc timeout')

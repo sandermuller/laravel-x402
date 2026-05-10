@@ -35,9 +35,7 @@ final class MiddlewareSpecRegistry
             $spec->skipWhen instanceof Closure ? spl_object_hash($spec->skipWhen) : '',
         ]));
 
-        // Snapshot the spec — fluent setters return $this, so a builder kept
-        // alive after registration could otherwise mutate the cached entry.
-        self::$specs[$token] = clone $spec;
+        self::$specs[$token] = $spec;
 
         return $token;
     }

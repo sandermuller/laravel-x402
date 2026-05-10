@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.6.0 - 2026-05-10
+
+### What's new
+
+- **Per-tenant `FacilitatorResolver`.** New contract mirrors the existing `WalletResolver` pattern so multi-tenant SaaS apps can ship a different facilitator per tenant — typically per-tenant CDP credentials, occasionally per-tenant self-hosted facilitator URLs. `RequirePayment` now resolves the facilitator per-request via the bound resolver instead of taking a `FacilitatorClient` directly. Default `ConfiguredFacilitatorResolver` returns the env-configured Coinbase facilitator on every resolve — single-tenant setups need no change.
+- **`DispatchingFacilitatorFactory::wrap()` helper.** Custom resolvers wrap their per-tenant `FacilitatorClient` through this helper to keep the `PaymentSettled` / `PaymentRejected` event-firing invariant centralised. Pass `container:` so request-scoped context registered via `X402::capturePaymentContext()` rides along to async listeners.
+- **`X402::fake()` rebinds both `FacilitatorClient` and `FacilitatorResolver`.** Tests against single-tenant code see no change. Tenant-aware test code should bind a custom resolver explicitly with one `FakeFacilitator` per tenant rather than calling `X402::fake()` — the facade docblock flags this and a reference test (`tests/Feature/RequirePaymentResolverIntegrationTest`) demonstrates the pattern.
+- **README "Multi-tenant facilitator" recipe.** New section under Recipes covering resolver implementation, registration, and Octane caveats (don't cache per-request results on the resolver itself).
+
+**Full Changelog**: https://github.com/SanderMuller/laravel-x402/compare/0.5.0...0.6.0
+
 ## 0.5.0 - 2026-05-10
 
 ### What's new
@@ -23,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   $spec = RequirePayment::using('0.01');
   $spec->payTo($address);                      // <-- value discarded; spec unchanged
   Route::get('/x', X)->middleware($spec);
+  
   
   ```
   Fix by chaining or assigning: `$spec = $spec->payTo($address);`.

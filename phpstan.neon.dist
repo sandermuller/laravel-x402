@@ -94,6 +94,27 @@ parameters:
             identifier: classConstant.internalClass
             path: tests/
             reportUnmatched: false
+        # Tests legitimately exercise `@internal` value objects (AssetEntry,
+        # BotPatternConfig, PaymentIdentity) that the package marks internal
+        # to discourage public-API growth. Allowing tests to construct, pass,
+        # and read fields keeps the markers honest in src/ without forcing
+        # awkward indirection in tests/.
+        -
+            identifier: staticMethod.internalClass
+            path: tests/
+            reportUnmatched: false
+        -
+            identifier: property.internalClass
+            path: tests/
+            reportUnmatched: false
+        -
+            identifier: new.internalClass
+            path: tests/
+            reportUnmatched: false
+        -
+            identifier: return.internalClass
+            path: tests/
+            reportUnmatched: false
         # pest-plugin-arch's ArchExpectation interface is marked @internal but
         # the fluent helpers (ignoring, etc.) are the user-facing API.
         -

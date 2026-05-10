@@ -54,9 +54,12 @@ final readonly class RequirePaymentFromBots
         );
     }
 
-    public function handle(Request $request, Closure $next, string $amount = '0', string $asset = 'USDC', string $networkSlug = 'base'): Response
+    public function handle(Request $request, Closure $next, string $amount = '0', string $asset = 'USDC', string $networkSlug = ''): Response
     {
         if ($this->detector->isBot((string) $request->userAgent())) {
+            // Empty $networkSlug is forwarded as-is — RequirePayment::handle
+            // resolves it from `x402.network` config so both legacy macros
+            // (`x402:` and `x402.bots:`) share the configured default.
             return $this->inner->handle($request, $next, $amount, $asset, $networkSlug);
         }
 

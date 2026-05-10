@@ -29,8 +29,14 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Network (CAIP-2)
+    | Default network (CAIP-2)
     |--------------------------------------------------------------------------
+    |
+    | Used by the `x402` and `x402.bots` route-string macros when the
+    | network parameter is omitted (e.g. `Route::middleware('x402:0.01,USDC')`).
+    | Routes that pass an explicit network — `'x402:0.01,USDC,base'` or
+    | `RequirePayment::using('0.01', network: 'polygon')` — bypass this
+    | default. NetworkRegistry passes raw CAIP-2 values through verbatim.
     |
     | "eip155:8453" = Base mainnet. Other supported: 84532 (Base Sepolia),
     | 1 (Ethereum), 137 (Polygon), 42161 (Arbitrum One).
@@ -62,8 +68,11 @@ return [
     | Default settlement asset
     |--------------------------------------------------------------------------
     |
-    | Used when a route doesn't specify an asset symbol, or specifies one not
-    | listed under `assets` below.
+    | Used when a route's asset symbol matches `asset.symbol` (or the route
+    | omits the asset arg and the default `USDC` matches). Symbols that are
+    | NOT listed in `assets` below and NOT equal to `asset.symbol` are
+    | rejected with `Unknown x402 asset symbol "..."` — there is no silent
+    | fallback to the default block.
     */
 
     'asset' => [
@@ -82,9 +91,11 @@ return [
     |--------------------------------------------------------------------------
     |
     | When a route picks an asset by symbol via the middleware arg or
-    | `->asAsset('PYUSD')`, the lookup hits this table. Symbols not listed
-    | here fall back to the `asset` block above. Keep address + decimals
-    | + eip712 in sync with the on-chain contract for each asset.
+    | `->asAsset('PYUSD')`, the lookup hits this table first; the `asset`
+    | block above is consulted if the symbol matches `asset.symbol`.
+    | Anything else throws — add new entries here before referencing them.
+    | Keep address + decimals + eip712 in sync with the on-chain contract
+    | for each asset.
     */
 
     'assets' => [

@@ -42,6 +42,7 @@ use X402\Laravel\Console\PrunePaymentsCommand;
 use X402\Laravel\Console\TestPaymentCommand;
 use X402\Laravel\Console\VerifyConfigCommand;
 use X402\Laravel\Detection\BotDetector as DeprecatedBotDetector;
+use X402\Laravel\Detection\BotPatternConfig;
 use X402\Laravel\Events\PaymentRejected;
 use X402\Laravel\Events\PaymentSettled;
 use X402\Laravel\Facilitator\ConfiguredFacilitatorResolver;
@@ -53,8 +54,10 @@ use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 use X402\Laravel\Listeners\RecordPayment;
 use X402\Laravel\Listeners\RecordPaymentQueued;
+use X402\Laravel\Support\AssetRegistry;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
+use X402\Laravel\Support\NetworkRegistry;
 use X402\Laravel\Support\PaymentContextRegistry;
 use X402\Laravel\Support\SchemeMap;
 use X402\Protocol\Version;
@@ -71,6 +74,15 @@ final class X402ServiceProvider extends ServiceProvider
 
         $this->app->singleton(EnforcementPolicy::class, fn (): EnforcementPolicy => new EnforcementPolicy());
         $this->app->singleton(PaymentContextRegistry::class, fn (): PaymentContextRegistry => new PaymentContextRegistry());
+        $this->app->singleton(MiddlewareSpecRegistry::class, fn (): MiddlewareSpecRegistry => new MiddlewareSpecRegistry());
+        // Lazy singletons — built on first resolve, cached for the worker
+        // lifetime. Lazy (not eager-at-boot) because tests and some
+        // multi-tenant setups mutate `x402.*` config after boot and expect
+        // the registry to read the new shape on first use. Misconfiguration
+        // surfaces on the first paid request instead of at boot;
+        // `x402:verify-config` covers the boot-time validation path.
+        $this->app->singleton(AssetRegistry::class, fn (Application $app): AssetRegistry => AssetRegistry::fromConfig($app->make(Repository::class)));
+        $this->app->singleton(NetworkRegistry::class, fn (Application $app): NetworkRegistry => NetworkRegistry::fromConfig($app->make(Repository::class)));
 
         $this->registerPsrFactories();
         $this->registerSchemes();
@@ -216,16 +228,14 @@ final class X402ServiceProvider extends ServiceProvider
             /** @var array<string, BotDetector> $cache */
             static $cache = [];
 
-            $config = $app->make(Repository::class);
-            $patterns = ConfigReader::stringListOrNull($config, 'x402.bots.patterns');
-            $extra = ConfigReader::stringListOrNull($config, 'x402.bots.extra_patterns') ?? [];
+            $cfg = BotPatternConfig::fromConfig($app->make(Repository::class));
 
             // Cheap key — count + first/last/joined-tail-hash beats serialize() on hot path
             // and is stable across requests with identical config.
-            $key = ($patterns === null ? 'D' : 'O' . count($patterns) . ':' . hash('xxh3', implode("\0", $patterns)))
-                . '|E' . count($extra) . ':' . hash('xxh3', implode("\0", $extra));
+            $key = ($cfg->patterns === null ? 'D' : 'O' . count($cfg->patterns) . ':' . hash('xxh3', implode("\0", $cfg->patterns)))
+                . '|E' . count($cfg->extra) . ':' . hash('xxh3', implode("\0", $cfg->extra));
 
-            return $cache[$key] ??= new BotDetector($patterns, $extra);
+            return $cache[$key] ??= new BotDetector($cfg->patterns, $cfg->extra);
         };
 
         $this->app->bind(BotDetector::class, $factory);
@@ -235,11 +245,9 @@ final class X402ServiceProvider extends ServiceProvider
         // public API as the upstream class and delegates internally; drop
         // in 0.6.0 along with src/Detection/BotDetector.php.
         $this->app->bind(DeprecatedBotDetector::class, function (Application $app): DeprecatedBotDetector {
-            $config = $app->make(Repository::class);
-            $patterns = ConfigReader::stringListOrNull($config, 'x402.bots.patterns');
-            $extra = ConfigReader::stringListOrNull($config, 'x402.bots.extra_patterns') ?? [];
+            $cfg = BotPatternConfig::fromConfig($app->make(Repository::class));
 
-            return new DeprecatedBotDetector($patterns, $extra);
+            return new DeprecatedBotDetector($cfg->patterns, $cfg->extra);
         });
     }
 
@@ -352,9 +360,15 @@ final class X402ServiceProvider extends ServiceProvider
      *   - {@see EnforcementPolicy} predicate snapshot/restore (the singleton
      *     is warned about in README — controllers occasionally call
      *     `enforceWhen()` mid-request).
-     *   - {@see MiddlewareSpecRegistry::flush()} — `static $specs` is process-
-     *     global; `routes/web.php` rebuilds it on every Octane request, so
-     *     entries from earlier file loads accumulate without a flush.
+     *   - {@see PaymentContextRegistry} per-request capture/formatter
+     *     overrides are reset to the boot-time defaults.
+     *
+     * The {@see MiddlewareSpecRegistry} is intentionally NOT flushed here:
+     * specs are registered when `MiddlewareSpec::__toString()` runs during
+     * route resolution (which in Octane happens at boot, not per request),
+     * so a per-request flush would wipe entries the next request still
+     * needs. Request-time spec mutation is unsupported (`@internal` note on
+     * `add()`).
      *
      * No-op if Octane isn't present. We listen via the framework Dispatcher
      * by FQCN so we don't need to require Octane as a dev dependency.
@@ -375,7 +389,6 @@ final class X402ServiceProvider extends ServiceProvider
         $events->listen('Laravel\\Octane\\Events\\RequestReceived', static function () use ($policy, $context): void {
             $policy->restoreSnapshot();
             $context->restoreSnapshot();
-            MiddlewareSpecRegistry::flush();
         });
     }
 }

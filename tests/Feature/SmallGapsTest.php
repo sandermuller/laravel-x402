@@ -42,3 +42,15 @@ it('verify-config --ping reports a 4xx facilitator as failure', function (): voi
         ->expectsOutputToContain('Facilitator returned HTTP 401')
         ->assertFailed();
 });
+
+it('verify-config fails when x402.assets contains a malformed entry', function (): void {
+    config()->set('x402.assets.PYUSD', [
+        // address intentionally missing
+        'decimals' => 6,
+        'eip712' => ['name' => 'PYUSD', 'version' => '1'],
+    ]);
+
+    $this->artisan('x402:verify-config')
+        ->expectsOutputToContain('Asset config invalid:')
+        ->assertFailed();
+});

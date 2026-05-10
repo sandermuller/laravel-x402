@@ -9,6 +9,7 @@ use Illuminate\Contracts\Config\Repository;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 use X402\Client\Wallet;
+use X402\Laravel\Support\AssetRegistry;
 use X402\Laravel\Support\ConfigReader;
 
 final class VerifyConfigCommand extends Command
@@ -32,10 +33,10 @@ final class VerifyConfigCommand extends Command
             $errors[] = 'x402.network is empty.';
         }
 
-        $asset = $config->get('x402.asset');
-        $address = is_array($asset) ? ($asset['address'] ?? null) : null;
-        if (! is_string($address) || $address === '') {
-            $errors[] = 'x402.asset.address is empty.';
+        try {
+            AssetRegistry::fromConfig($config);
+        } catch (Throwable $throwable) {
+            $errors[] = 'Asset config invalid: ' . $throwable->getMessage();
         }
 
         $facilitatorUrl = ConfigReader::string($config, 'x402.facilitator.url');

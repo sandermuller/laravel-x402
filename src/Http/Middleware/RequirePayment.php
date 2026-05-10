@@ -16,12 +16,15 @@ use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use Symfony\Component\HttpFoundation\Response;
 use X402\Laravel\Facilitator\FacilitatorResolver;
 use X402\Laravel\Server\EloquentPriceTable;
+use X402\Laravel\Support\AssetRegistry;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
+use X402\Laravel\Support\NetworkRegistry;
 use X402\Laravel\Support\SchemeMap;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\Version;
 use X402\Replay\NonceStoreContract;
+use X402\Server\BotDetector;
 use X402\Server\PaymentEnforcer;
 use X402\Support\PriceParser;
 
@@ -63,6 +66,9 @@ final readonly class RequirePayment
         private EnforcementPolicy $policy,
         private LoggerInterface $logger,
         private SchemeMap $schemes,
+        private AssetRegistry $assets,
+        private NetworkRegistry $networks,
+        private BotDetector $botDetector,
     ) {}
 
     /**
@@ -75,6 +81,13 @@ final readonly class RequirePayment
      *
      * Both work — the spec serializes to the colon-separated middleware
      * string at the moment Laravel hashes its middleware list.
+     *
+     * **`$network` default is the literal `'base'`, not `x402.network` config.**
+     * The `x402.network` operator default is wired only into the route-string
+     * macro (`Route::middleware('x402:0.01,USDC')` with no network arg). The
+     * fluent builder always carries an explicit slug so the spec wire-format
+     * stays bit-stable across processes — pass `network:` explicitly if you
+     * want a non-`base` chain.
      */
     public static function using(string $amount, string $asset = 'USDC', string $network = 'base'): MiddlewareSpec
     {
@@ -86,9 +99,17 @@ final readonly class RequirePayment
         );
     }
 
-    public function handle(Request $request, Closure $next, string $amount = '0', string $asset = 'USDC', string $networkSlug = 'base'): Response
+    public function handle(Request $request, Closure $next, string $amount = '0', string $asset = 'USDC', string $networkSlug = ''): Response
     {
         $spec = null;
+
+        if ($networkSlug === '') {
+            // Route-string macro `x402:0.01,USDC` (no network arg) defers
+            // to the operator-configured `x402.network`. The fluent
+            // `RequirePayment::using()` builder still defaults to 'base'
+            // explicitly so the spec wire-format stays bit-stable.
+            $networkSlug = ConfigReader::string($this->config, 'x402.network', 'eip155:8453');
+        }
 
         if (str_starts_with($amount, 'x402-spec-')) {
             $spec = MiddlewareSpecRegistry::resolve($amount);
@@ -98,6 +119,13 @@ final readonly class RequirePayment
             $networkSlug = $spec->network;
 
             if ($spec->skipWhen instanceof Closure && ($spec->skipWhen)($request)) {
+                /** @var Response $response */
+                $response = $next($request);
+
+                return $response;
+            }
+
+            if ($spec->botGated && ! $this->botDetector->isBot((string) $request->userAgent())) {
                 /** @var Response $response */
                 $response = $next($request);
 
@@ -158,12 +186,8 @@ final readonly class RequirePayment
 
     private function buildChallenge(string $amount, string $assetSymbol, string $networkSlug, Request $request, ?MiddlewareSpec $spec = null): PaymentRequired
     {
-        $network = $this->resolveNetwork($networkSlug);
-        $assetConfig = $this->resolveAssetConfig($assetSymbol);
-
-        $decimalsRaw = $assetConfig['decimals'] ?? 6;
-        $decimals = is_int($decimalsRaw) ? $decimalsRaw : 6;
-        $atomic = PriceParser::toAtomic($amount, $decimals);
+        $entry = $this->assets->get($assetSymbol);
+        $atomic = PriceParser::toAtomic($amount, $entry->decimals);
 
         $payTo = $spec instanceof MiddlewareSpec && $spec->payTo !== null
             ? $spec->payTo
@@ -172,20 +196,11 @@ final readonly class RequirePayment
             throw new RuntimeException('x402.recipient is not configured. Set X402_RECIPIENT in your environment.');
         }
 
-        $address = $assetConfig['address'] ?? '';
-        $assetAddress = is_string($address) ? $address : '';
-
-        $eip712Raw = $assetConfig['eip712'] ?? [];
-        $eip712 = is_array($eip712Raw) ? $eip712Raw : [];
-
-        $name = $eip712['name'] ?? '';
-        $version = $eip712['version'] ?? '2';
-
         return new PaymentRequired(
             scheme: 'exact',
-            network: $network,
+            network: $this->networks->resolve($networkSlug),
             amount: $atomic,
-            asset: $assetAddress,
+            asset: $entry->address,
             payTo: $payTo,
             maxTimeoutSeconds: ConfigReader::int($this->config, 'x402.max_timeout_seconds', 60),
             resource: $request->fullUrl(),
@@ -193,60 +208,9 @@ final readonly class RequirePayment
                 ? $spec->description
                 : $assetSymbol . ' payment for ' . $request->path(),
             extra: [
-                'name' => is_string($name) ? $name : '',
-                'version' => is_string($version) ? $version : '2',
+                'name' => $entry->eip712Name,
+                'version' => $entry->eip712Version,
             ],
         );
-    }
-
-    private function resolveNetwork(string $slug): string
-    {
-        $map = $this->config->get('x402.networks');
-
-        if (is_array($map) && isset($map[$slug]) && is_string($map[$slug])) {
-            return $map[$slug];
-        }
-
-        return $slug;
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function resolveAssetConfig(string $symbol): array
-    {
-        $assets = $this->config->get('x402.assets');
-
-        if (is_array($assets) && isset($assets[$symbol]) && is_array($assets[$symbol])) {
-            /** @var array<string, mixed> $picked */
-            $picked = $assets[$symbol];
-
-            return $picked;
-        }
-
-        $default = $this->config->get('x402.asset');
-
-        if (! is_array($default)) {
-            throw new RuntimeException('x402.asset config is missing.');
-        }
-
-        $defaultSymbol = is_string($default['symbol'] ?? null) ? $default['symbol'] : 'USDC';
-
-        if ($symbol === $defaultSymbol) {
-            /** @var array<string, mixed> $default */
-            return $default;
-        }
-
-        $known = is_array($assets) ? array_keys($assets) : [];
-        if (! in_array($defaultSymbol, $known, true)) {
-            $known[] = $defaultSymbol;
-        }
-
-        throw new RuntimeException(sprintf(
-            'Unknown x402 asset symbol "%s". Known symbols: %s. Add it under `x402.assets` or use the default ("%s").',
-            $symbol,
-            implode(', ', $known),
-            $defaultSymbol,
-        ));
     }
 }

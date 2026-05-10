@@ -8,6 +8,7 @@ use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 use X402\Laravel\Tests\Stubs\StubFacilitator;
+use X402\Laravel\X402ServiceProvider;
 
 afterEach(function (): void {
     MiddlewareSpecRegistry::flush();
@@ -150,4 +151,78 @@ it('throws a clear error when token cannot be resolved (cached routes footgun)',
     expect($response->getStatusCode())->toBe(500)
         ->and($token)
         ->toStartWith('x402-spec-');
+});
+
+it('binds the registry as a container singleton', function (): void {
+    $a = $this->app->make(MiddlewareSpecRegistry::class);
+    $b = $this->app->make(MiddlewareSpecRegistry::class);
+
+    expect($a)->toBe($b);
+});
+
+it('static facade routes through the container instance', function (): void {
+    $fresh = new MiddlewareSpecRegistry();
+    $this->app->instance(MiddlewareSpecRegistry::class, $fresh);
+
+    $spec = RequirePayment::using('0.01')->payTo('0xswap');
+    $token = explode(':', (string) $spec, 2)[1];
+
+    expect($fresh->exists($token))->toBeTrue()
+        ->and(MiddlewareSpecRegistry::resolve($token))->toBe($spec);
+});
+
+it('distinguishes two skipWhen closures defined on the same line', function (): void {
+    $a = (string) RequirePayment::using('0.01')->skipWhen(fn (): bool => true);
+    $b = (string) RequirePayment::using('0.01')->skipWhen(fn (): bool => true);
+
+    expect($a)->not->toBe($b);
+});
+
+it('reuses the same token when the same closure object is registered twice', function (): void {
+    $predicate = fn (): bool => true;
+    $a = (string) RequirePayment::using('0.01')->skipWhen($predicate);
+    $b = (string) RequirePayment::using('0.01')->skipWhen($predicate);
+
+    expect($a)->toBe($b);
+});
+
+it('onlyBots flips the botGated flag and forces token serialisation', function (): void {
+    $spec = RequirePayment::using('0.01')->onlyBots();
+
+    expect($spec->botGated)->toBeTrue()
+        ->and((string) $spec)
+        ->toStartWith(RequirePayment::class . ':x402-spec-');
+});
+
+it('botGated specs short-circuit non-bots in RequirePayment', function (): void {
+    $this->app->instance(FacilitatorClient::class, new StubFacilitator());
+
+    Route::middleware((string) RequirePayment::using('0.01')->onlyBots())
+        ->get('/bot-only', fn () => 'free for humans');
+
+    $human = $this->withHeader('User-Agent', 'Mozilla/5.0 (Macintosh) Chrome/130.0')->get('/bot-only');
+    $bot = $this->withHeader('User-Agent', 'GPTBot/1.0')->get('/bot-only');
+
+    expect($human->getStatusCode())->toBe(200)
+        ->and($bot->getStatusCode())
+        ->toBe(402);
+});
+
+it('does not flush the registry on the Octane RequestReceived listener', function (): void {
+    /*
+     * Regression for the active bug fixed in Phase 1 of the post-0.5
+     * code-quality refactor spec: the previous Octane integration called
+     * MiddlewareSpecRegistry::flush() on RequestReceived, which wiped
+     * boot-time route specs that subsequent requests still needed.
+     *
+     * Octane isn't installed in tests (class_exists returns false), so the
+     * listener never installs and we assert the absence of flushing by
+     * inspecting the source of the integration method directly. Prefer this
+     * to spinning up an Octane harness for one regression test.
+     */
+    $file = (new ReflectionClass(X402ServiceProvider::class))->getFileName();
+    expect($file)->toBeString();
+
+    $source = file_get_contents((string) $file);
+    expect($source)->toBeString()->not->toContain('MiddlewareSpecRegistry::flush()');
 });

@@ -69,6 +69,32 @@ it('reads network slugs from config, allowing custom chains', function (): void 
     expect($body['accepts'][0]['network'])->toBe('eip155:7777777');
 });
 
+it('falls back to x402.network when the route-string macro omits the network arg', function (): void {
+    config()->set('x402.network', 'eip155:7777777');
+    $this->app->instance(FacilitatorClient::class, new StubFacilitator());
+
+    Route::middleware('x402:0.01,USDC')->get('/no-net', fn () => 'ok');
+
+    $body = json_decode((string) $this->get('/no-net')->getContent(), true);
+
+    expect($body)->toBeArray();
+    /** @var array{accepts: list<array{network: string}>} $body */
+    expect($body['accepts'][0]['network'])->toBe('eip155:7777777');
+});
+
+it('falls back to x402.network on the bot route-string macro too', function (): void {
+    config()->set('x402.network', 'eip155:7777777');
+    $this->app->instance(FacilitatorClient::class, new StubFacilitator());
+
+    Route::middleware('x402.bots:0.01,USDC')->get('/no-net-bot', fn () => 'ok');
+
+    $body = json_decode((string) $this->withHeader('User-Agent', 'GPTBot/1.0')->get('/no-net-bot')->getContent(), true);
+
+    expect($body)->toBeArray();
+    /** @var array{accepts: list<array{network: string}>} $body */
+    expect($body['accepts'][0]['network'])->toBe('eip155:7777777');
+});
+
 it('resolves asset address+decimals from config map by symbol', function (): void {
     $this->app->instance(FacilitatorClient::class, new StubFacilitator());
 

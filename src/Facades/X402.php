@@ -6,6 +6,7 @@ namespace X402\Laravel\Facades;
 
 use Closure;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Facade;
 use RuntimeException;
@@ -48,13 +49,7 @@ final class X402 extends Facade
      */
     public static function enforceWhen(Closure $predicate): void
     {
-        $app = self::getFacadeApplication();
-
-        if ($app === null) {
-            throw new RuntimeException('X402::enforceWhen() requires a bound application instance.');
-        }
-
-        $app->make(EnforcementPolicy::class)->when($predicate);
+        self::app()->make(EnforcementPolicy::class)->when($predicate);
     }
 
     /**
@@ -81,11 +76,7 @@ final class X402 extends Facade
      */
     public static function fake(): FakeFacilitator
     {
-        $app = self::getFacadeApplication();
-
-        if ($app === null) {
-            throw new RuntimeException('X402::fake() requires a bound application instance.');
-        }
+        $app = self::app();
 
         $fake = new FakeFacilitator();
 
@@ -126,13 +117,7 @@ final class X402 extends Facade
      */
     public static function capturePaymentContext(Closure $capture): void
     {
-        $app = self::getFacadeApplication();
-
-        if ($app === null) {
-            throw new RuntimeException('X402::capturePaymentContext() requires a bound application instance.');
-        }
-
-        $app->make(PaymentContextRegistry::class)->capture($capture);
+        self::app()->make(PaymentContextRegistry::class)->capture($capture);
     }
 
     /**
@@ -153,17 +138,27 @@ final class X402 extends Facade
      */
     public static function resourceFormatter(Closure $formatter): void
     {
-        $app = self::getFacadeApplication();
-
-        if ($app === null) {
-            throw new RuntimeException('X402::resourceFormatter() requires a bound application instance.');
-        }
-
-        $app->make(PaymentContextRegistry::class)->resourceFormatter($formatter);
+        self::app()->make(PaymentContextRegistry::class)->resourceFormatter($formatter);
     }
 
     protected static function getFacadeAccessor(): string
     {
         return FacilitatorClient::class;
+    }
+
+    /**
+     * Resolve the facade's bound application or throw with a single,
+     * generic message. Centralises the four `getFacadeApplication() === null`
+     * guards the public methods used to repeat verbatim.
+     */
+    private static function app(): Application
+    {
+        $app = self::getFacadeApplication();
+
+        if ($app === null) {
+            throw new RuntimeException('X402 facade requires a bound application instance.');
+        }
+
+        return $app;
     }
 }

@@ -582,7 +582,7 @@ The most-set keys (see `config/x402.php` for the full reference):
 | Key | Env | Default |
 |-----|-----|---------|
 | `recipient` | `X402_RECIPIENT` | _required_ |
-| `network` | `X402_NETWORK` | `eip155:8453` (Base) |
+| `network` | `X402_NETWORK` | `eip155:8453` (Base) — default for `x402:0.01,USDC` route-string macro when network is omitted |
 | `networks` | _(array)_ | Slug → CAIP-2 map (`base`, `polygon`, …). Add custom chains here. |
 | `asset.address` | `X402_ASSET_ADDRESS` | USDC on Base |
 | `assets` | _(array)_ | Symbol → `{address, decimals, eip712}` map. Resolved when `RequirePayment::using('0.01', 'PYUSD')` picks a non-default asset. |

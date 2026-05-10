@@ -40,6 +40,7 @@ final readonly class MiddlewareSpec implements Stringable
         public ?string $payTo = null,
         public ?string $description = null,
         public ?Closure $skipWhen = null,
+        public bool $botGated = false,
     ) {}
 
     public function payTo(string $address): self
@@ -52,6 +53,7 @@ final readonly class MiddlewareSpec implements Stringable
             payTo: $address,
             description: $this->description,
             skipWhen: $this->skipWhen,
+            botGated: $this->botGated,
         );
     }
 
@@ -65,6 +67,7 @@ final readonly class MiddlewareSpec implements Stringable
             payTo: $this->payTo,
             description: $this->description,
             skipWhen: $this->skipWhen,
+            botGated: $this->botGated,
         );
     }
 
@@ -78,6 +81,7 @@ final readonly class MiddlewareSpec implements Stringable
             payTo: $this->payTo,
             description: $this->description,
             skipWhen: $this->skipWhen,
+            botGated: $this->botGated,
         );
     }
 
@@ -91,6 +95,7 @@ final readonly class MiddlewareSpec implements Stringable
             payTo: $this->payTo,
             description: $description,
             skipWhen: $this->skipWhen,
+            botGated: $this->botGated,
         );
     }
 
@@ -110,12 +115,32 @@ final readonly class MiddlewareSpec implements Stringable
             payTo: $this->payTo,
             description: $this->description,
             skipWhen: $predicate,
+            botGated: $this->botGated,
+        );
+    }
+
+    /**
+     * Charge only requests detected as bots / AI agents (User-Agent based).
+     * Equivalent to routing through `RequirePaymentFromBots` but composes
+     * with the rest of the fluent builder (`payTo`, `describing`, etc.).
+     */
+    public function onlyBots(): self
+    {
+        return new self(
+            middleware: $this->middleware,
+            amount: $this->amount,
+            asset: $this->asset,
+            network: $this->network,
+            payTo: $this->payTo,
+            description: $this->description,
+            skipWhen: $this->skipWhen,
+            botGated: true,
         );
     }
 
     public function __toString(): string
     {
-        if ($this->payTo === null && $this->description === null && ! $this->skipWhen instanceof Closure) {
+        if ($this->payTo === null && $this->description === null && ! $this->skipWhen instanceof Closure && ! $this->botGated) {
             return $this->middleware . ':' . $this->amount . ',' . $this->asset . ',' . $this->network;
         }
 

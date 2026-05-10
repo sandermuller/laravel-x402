@@ -14,7 +14,7 @@ use RuntimeException;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
 use Symfony\Component\HttpFoundation\Response;
-use X402\Facilitator\FacilitatorClient;
+use X402\Laravel\Facilitator\FacilitatorResolver;
 use X402\Laravel\Server\EloquentPriceTable;
 use X402\Laravel\Support\ConfigReader;
 use X402\Laravel\Support\EnforcementPolicy;
@@ -54,7 +54,7 @@ use X402\Support\PriceParser;
 final readonly class RequirePayment
 {
     public function __construct(
-        private FacilitatorClient $facilitator,
+        private FacilitatorResolver $facilitators,
         private NonceStoreContract $nonceStore,
         private ConfigRepository $config,
         private Psr17Factory $psr17,
@@ -131,9 +131,11 @@ final readonly class RequirePayment
             fallbackAmount: $amount,
         );
 
+        $facilitator = $this->facilitators->resolve($request);
+
         $enforcer = new PaymentEnforcer(
             priceTable: $priceTable,
-            facilitator: $this->facilitator,
+            facilitator: $facilitator,
             nonceStore: $this->nonceStore,
             schemes: $this->schemes->map,
             responseFactory: $this->psr17,

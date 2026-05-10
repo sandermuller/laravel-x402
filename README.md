@@ -253,6 +253,90 @@ The `$context` is forwarded onto every `OutboundPaymentSent` event so
 listeners can attribute spend back to a tenant, job, or correlation id
 without parsing the URL.
 
+### Multi-tenant facilitator
+
+Multi-tenant SaaS apps that ship a different facilitator per tenant —
+typically per-tenant CDP credentials, occasionally per-tenant self-hosted
+facilitator URLs — bind a custom `FacilitatorResolver`. The default
+resolver returns the env-configured Coinbase facilitator on every
+resolve; backward compatible with single-tenant setups.
+
+```php
+use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Events\Dispatcher;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\StreamFactoryInterface;
+use X402\Facilitator\CoinbaseFacilitator;
+use X402\Facilitator\FacilitatorClient;
+use X402\Laravel\Facilitator\DispatchingFacilitatorFactory;
+use X402\Laravel\Facilitator\FacilitatorResolver;
+use X402\Laravel\Support\PaymentContextRegistry;
+
+final readonly class TenantFacilitatorResolver implements FacilitatorResolver
+{
+    public function __construct(
+        private FacilitatorClient $default,         // env-configured, already wrapped
+        private TenantContext $tenants,
+        private ClientInterface $http,
+        private RequestFactoryInterface $requestFactory,
+        private StreamFactoryInterface $streamFactory,
+        private Dispatcher $events,
+        private PaymentContextRegistry $context,
+        private Container $container,
+    ) {}
+
+    public function resolve(mixed $context = null): FacilitatorClient
+    {
+        $tenant = $this->tenants->current();
+
+        if ($tenant?->facilitator_url === null) {
+            return $this->default;
+        }
+
+        return DispatchingFacilitatorFactory::wrap(
+            inner: new CoinbaseFacilitator(
+                http: $this->http,
+                requestFactory: $this->requestFactory,
+                streamFactory: $this->streamFactory,
+                baseUrl: $tenant->facilitator_url,
+                defaultHeaders: ['Authorization' => 'Bearer ' . $tenant->facilitator_token],
+            ),
+            events: $this->events,
+            context: $this->context,
+            container: $this->container,
+        );
+    }
+}
+```
+
+Register in a service provider:
+
+```php
+$this->app->bind(FacilitatorResolver::class, TenantFacilitatorResolver::class);
+```
+
+The resolver receives the current `Request` as `$context` so it can
+dispatch on tenant id, headers, route, model — whatever the host
+threads through.
+
+**Caveats.**
+
+- Custom resolvers MUST wrap each returned `FacilitatorClient` in
+  `DispatchingFacilitator` (use `DispatchingFacilitatorFactory::wrap()`) —
+  otherwise `PaymentSettled` / `PaymentRejected` events stop firing for
+  that tenant. Pass `container:` so request-scoped context registered
+  via `X402::capturePaymentContext()` rides along; without it, captured
+  fields silently drop on tenant traffic.
+- Resolvers should be singletons. Don't cache per-request
+  `FacilitatorClient` instances on the resolver itself — that would
+  bleed across requests in long-lived workers (Octane, RoadRunner).
+- Facade calls (`X402::verify(...)`, `X402::settle(...)`) are NOT
+  routed through the resolver. They always hit the default
+  `FacilitatorClient` binding. Multi-tenant routing only applies to
+  middleware-driven traffic; jobs and console commands operate on
+  the configured default.
+
 ### Payment history
 
 Opt-in (since 0.5.0). An Eloquent listener records every settled and
@@ -476,7 +560,10 @@ X402::fake()->failSettle('on-chain-revert');
 
 `X402::fake()` swaps the bound `FacilitatorClient` for a recording fake
 that still dispatches the same Laravel events — `Event::fake()` works
-alongside.
+alongside. It also rebinds `FacilitatorResolver` to the fake, so a
+tenant-aware resolver is bypassed for the duration of the test; to
+exercise tenant routing, bind your own resolver explicitly with one
+`FakeFacilitator` per tenant rather than calling `X402::fake()`.
 
 ## Console commands
 

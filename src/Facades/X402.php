@@ -13,8 +13,10 @@ use X402\Facilitator\FacilitatorClient;
 use X402\Facilitator\SettleResult;
 use X402\Facilitator\VerifyResult;
 use X402\Laravel\Facilitator\DispatchingFacilitator;
+use X402\Laravel\Facilitator\FacilitatorResolver;
 use X402\Laravel\Support\EnforcementPolicy;
 use X402\Laravel\Support\PaymentContextRegistry;
+use X402\Laravel\Testing\FakeFacilitatorResolver;
 use X402\Protocol\PaymentRequired;
 use X402\Protocol\PaymentSignature;
 use X402\Testing\FakeFacilitator;
@@ -67,6 +69,15 @@ final class X402 extends Facade
      * The fake is wrapped in DispatchingFacilitator so PaymentSettled /
      * PaymentRejected events still fire — `Event::fake([PaymentSettled::class])`
      * works alongside.
+     *
+     * **Tenant routing is bypassed.** This method also rebinds
+     * `FacilitatorResolver` to `FakeFacilitatorResolver`, so a custom
+     * tenant-aware resolver is overridden for the duration of the test.
+     * Every request hits the same fake regardless of headers, route, or
+     * tenant context. To exercise tenant routing, bind your own resolver
+     * explicitly with one `FakeFacilitator` per tenant rather than calling
+     * `X402::fake()` — see `tests/Feature/RequirePaymentResolverIntegrationTest`
+     * for the pattern.
      */
     public static function fake(): FakeFacilitator
     {
@@ -78,12 +89,15 @@ final class X402 extends Facade
 
         $fake = new FakeFacilitator();
 
-        $app->instance(FacilitatorClient::class, new DispatchingFacilitator(
+        $wrapped = new DispatchingFacilitator(
             inner: $fake,
             events: $app->make(Dispatcher::class),
             context: $app->make(PaymentContextRegistry::class),
             container: $app,
-        ));
+        );
+
+        $app->instance(FacilitatorClient::class, $wrapped);
+        $app->instance(FacilitatorResolver::class, new FakeFacilitatorResolver($wrapped));
 
         return $fake;
     }

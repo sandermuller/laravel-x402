@@ -44,7 +44,9 @@ use X402\Laravel\Console\VerifyConfigCommand;
 use X402\Laravel\Detection\BotDetector as DeprecatedBotDetector;
 use X402\Laravel\Events\PaymentRejected;
 use X402\Laravel\Events\PaymentSettled;
+use X402\Laravel\Facilitator\ConfiguredFacilitatorResolver;
 use X402\Laravel\Facilitator\DispatchingFacilitator;
+use X402\Laravel\Facilitator\FacilitatorResolver;
 use X402\Laravel\Http\Middleware\CachePaymentResponse;
 use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
 use X402\Laravel\Http\Middleware\RequirePayment;
@@ -198,6 +200,8 @@ final class X402ServiceProvider extends ServiceProvider
             context: $app->make(PaymentContextRegistry::class),
             container: $app,
         ));
+
+        $this->app->singleton(FacilitatorResolver::class, ConfiguredFacilitatorResolver::class);
     }
 
     /**

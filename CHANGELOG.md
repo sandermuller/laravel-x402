@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.5.0 - 2026-05-10
+
+### What's new
+
+- **`MiddlewareSpec` is immutable.** `final readonly class` with `with*()`-style copiers under the same names (`payTo`, `onNetwork`, `asAsset`, `describing`, `skipWhen`). Each call returns a fresh instance carrying the override; the original is untouched. Closes the aliasing footgun where `Route::middleware($spec)` could lazily stringify after a later `$spec->payTo(...)` mutation bled into an earlier route's registered token.
+- **`MiddlewareSpecRegistry::register()` no longer clones on register.** The defensive `clone $spec` was a workaround for the mutable builder; with immutability it is redundant and was dropped. Token derivation (`sha256` over `middleware|amount|asset|network|payTo|description|spl_object_hash($skipWhen)`) is unchanged — equal specs continue to produce equal tokens within a single registry warm-up.
+- **Payment history persistence — opt-in.** New publishable migration (`x402-migrations` tag) and `X402\Laravel\Models\Payment` Eloquent model record every settled and rejected payment to a `x402_payments` table. Off by default; flip `X402_HISTORY=true` and run `php artisan migrate` to enable. Idempotent on `transaction` + `nonce` so retries through the `x402.cache` middleware update the existing row instead of inserting a duplicate. Sync listener by default; flip `X402_HISTORY_QUEUE` to defer writes onto a queue. Includes `php artisan x402:prune --before=30days --status=rejected` to keep the rejected-flood manageable.
+- **`X402::capturePaymentContext()` and `X402::resourceFormatter()`.** Two new facade methods. The capture closure attaches host-supplied per-request context (`tenant_id`, `user_id`, `request_id`) to every payment event, captured while the live `Request` is in scope so queued listeners receive it in payload memory. The formatter rewrites the `resource` field — typically a route name or stable identifier — before dispatch, so high-cardinality URLs (`/articles/{id}`) collapse to a single bucket in the history table.
+- **`PaymentSettled` / `PaymentRejected` constructors gained `?PaymentRequired $challenge`, `?PaymentSignature $signature`, and `array $context`.** All three are nullable / defaulted, but listeners that destructure event constructors positionally need to update — see UPGRADING.md for the diff.
+
+### Migration
+
+- **Chained calls keep working bit-for-bit.** The README pattern `RequirePayment::using('0.01')->payTo('0x...')->describing('Premium')` is consumed by Laravel's middleware list — no caller change required.
+- **Discarded return values are now silent no-ops.** Audit for:
+  ```php
+  $spec = RequirePayment::using('0.01');
+  $spec->payTo($address);                      // <-- value discarded; spec unchanged
+  Route::get('/x', X)->middleware($spec);
+  
+  ```
+  Fix by chaining or assigning: `$spec = $spec->payTo($address);`.
+- **Direct property writes now raise `Error: Cannot modify readonly property`.** Search call sites for assignments to `MiddlewareSpec::$amount|asset|network|payTo|description|skipWhen` — none exist in this package, but downstream code that reached past the public API will need to be rewritten to use the fluent setters.
+
+**Full Changelog**: https://github.com/SanderMuller/laravel-x402/compare/0.4.0...0.5.0
+
 ## 0.4.0 - 2026-05-09
 
 ### What's new

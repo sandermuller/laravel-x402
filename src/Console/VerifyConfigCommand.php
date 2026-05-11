@@ -44,6 +44,15 @@ final class VerifyConfigCommand extends Command
             $errors[] = 'x402.facilitator.url is empty.';
         }
 
+        $driver = ConfigReader::string($config, 'x402.wallet.driver', 'private_key');
+        $driverDetail = $driver;
+        if ($driver === 'kms') {
+            $provider = ConfigReader::string($config, 'x402.wallet.kms.provider');
+            $driverDetail = sprintf('kms (%s)', $provider === '' ? 'unset' : $provider);
+        }
+
+        $this->info('Wallet driver: ' . $driverDetail);
+
         try {
             $wallet = $this->laravel->make(Wallet::class);
             $this->info('Wallet address: ' . $wallet->address());

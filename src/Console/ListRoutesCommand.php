@@ -8,7 +8,8 @@ use Closure;
 use Illuminate\Console\Command;
 use Illuminate\Routing\Route;
 use Illuminate\Routing\Router;
-use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
+use Throwable;
+use X402\Laravel\Http\Middleware\MiddlewareSpec;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 
@@ -95,17 +96,26 @@ final class ListRoutesCommand extends Command
 
                 $params = $middleware === $needle ? '' : substr($middleware, strlen($needle) + 1);
 
-                if (str_starts_with($params, 'x402-spec-') && MiddlewareSpecRegistry::has($params)) {
-                    $spec = MiddlewareSpecRegistry::resolve($params);
+                if (str_starts_with($params, MiddlewareSpec::TOKEN_PREFIX)) {
+                    try {
+                        $spec = MiddlewareSpec::decode($params, RequirePayment::class);
+                    } catch (Throwable) {
+                        // Corrupt or signed-with-different-key payload — fall
+                        // through to the legacy-triple parse so the row still
+                        // renders (with placeholders) instead of vanishing.
+                        $spec = null;
+                    }
 
-                    return [
-                        $kind,
-                        $spec->amount,
-                        $spec->asset,
-                        $spec->network,
-                        $spec->payTo ?? '(default)',
-                        $spec->skipWhen instanceof Closure ? 'yes' : 'no',
-                    ];
+                    if ($spec instanceof MiddlewareSpec) {
+                        return [
+                            $kind,
+                            $spec->amount,
+                            $spec->asset,
+                            $spec->network,
+                            $spec->payTo ?? '(default)',
+                            $spec->skipWhen instanceof Closure ? 'yes' : 'no',
+                        ];
+                    }
                 }
 
                 $parts = explode(',', $params);

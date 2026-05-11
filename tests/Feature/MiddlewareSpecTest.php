@@ -2,52 +2,62 @@
 
 declare(strict_types=1);
 
+use Illuminate\Http\Request;
+use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route;
 use X402\Facilitator\FacilitatorClient;
-use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
+use X402\Laravel\Http\Middleware\MiddlewareSpec;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 use X402\Laravel\Tests\Stubs\StubFacilitator;
 use X402\Laravel\X402ServiceProvider;
 
-afterEach(function (): void {
-    MiddlewareSpecRegistry::flush();
-});
-
-it('serialises to legacy form when no overrides are set', function (): void {
+it('serialises to legacy triple when no overrides are set', function (): void {
     $spec = RequirePayment::using('0.01');
 
     expect((string) $spec)->toBe(RequirePayment::class . ':0.01,USDC,base');
 });
 
-it('serialises to a registry token when overrides are set', function (): void {
+it('serialises to a v2 token when overrides are set', function (): void {
     $spec = RequirePayment::using('0.01')
         ->payTo('0xroute')
         ->describing('Premium API call');
 
     $string = (string) $spec;
 
-    expect($string)->toStartWith(RequirePayment::class . ':x402-spec-');
+    expect($string)->toStartWith(RequirePayment::class . ':' . MiddlewareSpec::TOKEN_PREFIX);
 
     $token = explode(':', $string, 2)[1];
-    // Strict identity, not equivalence — registry stores the immutable spec
-    // by reference (no defensive clone).
-    expect(MiddlewareSpecRegistry::resolve($token))->toBe($spec);
+    $decoded = MiddlewareSpec::decode($token, RequirePayment::class);
+
+    expect($decoded->amount)->toBe('0.01')
+        ->and($decoded->payTo)->toBe('0xroute')
+        ->and($decoded->description)->toBe('Premium API call')
+        ->and($decoded->botGated)->toBeFalse();
 });
 
-it('a re-derived spec from a captured token is unaffected by later copies', function (): void {
-    $spec = RequirePayment::using('0.01')->payTo('0xroute');
-    $token = explode(':', (string) $spec, 2)[1];
+it('round-trips a closure-based skipWhen through the v2 token', function (): void {
+    $spec = RequirePayment::using('0.01')->skipWhen(fn (): bool => true);
 
-    // Derive a further copy after registration — must not affect the cached entry.
-    $variant = $spec->payTo('0xother');
+    $string = (string) $spec;
+    $token = explode(':', $string, 2)[1];
 
-    expect($variant->payTo)->toBe('0xother')
-        ->and($spec->payTo)
-        ->toBe('0xroute')
-        ->and(MiddlewareSpecRegistry::resolve($token)->payTo)
-        ->toBe('0xroute');
+    $decoded = MiddlewareSpec::decode($token, RequirePayment::class);
+
+    expect($decoded->skipWhen)->toBeInstanceOf(Closure::class);
+
+    $invoke = $decoded->skipWhen;
+    assert($invoke instanceof Closure);
+    expect($invoke(new Request()))->toBeTrue();
 });
+
+it('rejects a non-v2 token via decode()', function (): void {
+    MiddlewareSpec::decode('x402-spec-legacy-hash', RequirePayment::class);
+})->throws(RuntimeException::class, 'Not an x402 v2 spec token');
+
+it('rejects a corrupt v2 payload', function (): void {
+    MiddlewareSpec::decode(MiddlewareSpec::TOKEN_PREFIX . 'not-base64-and-not-serialized', RequirePayment::class);
+})->throws(RuntimeException::class);
 
 it('returns a fresh instance from each fluent setter', function (): void {
     $original = RequirePayment::using('0.01');
@@ -79,16 +89,11 @@ it('rejects direct property writes', function (): void {
         ->toThrow(Error::class, 'readonly');
 });
 
-it('is bit-stable across re-registration of equal specs', function (): void {
+it('is bit-stable across two equivalent spec strings', function (): void {
     $a = (string) RequirePayment::using('0.01')->payTo('0xABC')->describing('X');
     $b = (string) RequirePayment::using('0.01')->payTo('0xABC')->describing('X');
 
     expect($a)->toBe($b);
-});
-
-it('still serialises the legacy triple when no overrides set', function (): void {
-    expect((string) RequirePayment::using('0.01'))
-        ->toBe(RequirePayment::class . ':0.01,USDC,base');
 });
 
 it('immutability holds for RequirePaymentFromBots specs', function (): void {
@@ -99,15 +104,6 @@ it('immutability holds for RequirePaymentFromBots specs', function (): void {
         ->toBeNull()
         ->and((string) $spec)
         ->toStartWith(RequirePaymentFromBots::class . ':');
-});
-
-it('resolve throws a domain exception with a route-cache hint when the token is unknown', function (): void {
-    expect(fn (): mixed => MiddlewareSpecRegistry::resolve('x402-spec-bogus'))
-        ->toThrow(RuntimeException::class, 'route:cache');
-});
-
-it('has() returns false for unknown tokens', function (): void {
-    expect(MiddlewareSpecRegistry::has('x402-spec-bogus'))->toBeFalse();
 });
 
 it('uses the per-route payTo override when challenging', function (): void {
@@ -135,63 +131,55 @@ it('skipWhen returns true bypasses enforcement for that route only', function ()
     expect($this->get('/skipped')->getStatusCode())->toBe(200);
 });
 
-it('throws a clear error when token cannot be resolved (cached routes footgun)', function (): void {
+it('survives a route:cache round-trip without the original spec ever re-running', function (): void {
     $this->app->instance(FacilitatorClient::class, new StubFacilitator());
 
-    $spec = RequirePayment::using('0.01')->payTo('0xroute');
-    $string = (string) $spec;
-    $token = explode(':', $string, 2)[1];
+    // Build the middleware string in a "definition-time" scope, mirroring
+    // routes/web.php evaluation. Reference is dropped before request time so
+    // any in-process registry tracking would be wiped.
+    $middlewareString = (string) RequirePayment::using('0.04')
+        ->payTo('0xcacheable')
+        ->describing('Cache-safe route');
 
-    Route::middleware($string)->get('/cached', fn () => 'ok');
+    Route::middleware($middlewareString)->get('/cacheable', fn () => 'ok');
 
-    MiddlewareSpecRegistry::flush();
+    // Force the router's route table to be re-resolved from the cached
+    // string — same code path Laravel uses on a cached-route boot.
+    /** @var Router $router */
+    $router = $this->app->make(Router::class);
+    $router->getRoutes()->refreshNameLookups();
 
-    $response = $this->get('/cached');
+    $response = $this->get('/cacheable');
 
-    expect($response->getStatusCode())->toBe(500)
-        ->and($token)
-        ->toStartWith('x402-spec-');
+    expect($response->getStatusCode())->toBe(402);
+
+    $body = json_decode((string) $response->getContent(), true);
+    expect($body)->toBeArray();
+    /** @var array{accepts: list<array{payTo: string, description?: string}>} $body */
+    expect($body['accepts'][0]['payTo'])->toBe('0xcacheable')
+        ->and($body['accepts'][0]['description'] ?? null)->toBe('Cache-safe route');
 });
 
-it('binds the registry as a container singleton', function (): void {
-    $a = $this->app->make(MiddlewareSpecRegistry::class);
-    $b = $this->app->make(MiddlewareSpecRegistry::class);
+it('preserves a closure-based skipWhen across the route-cache simulation', function (): void {
+    $this->app->instance(FacilitatorClient::class, new StubFacilitator());
 
-    expect($a)->toBe($b);
+    $middlewareString = (string) RequirePayment::using('0.05')->skipWhen(fn (): bool => true);
+
+    Route::middleware($middlewareString)->get('/cached-skip', fn () => 'free-after-cache');
+
+    /** @var Router $router */
+    $router = $this->app->make(Router::class);
+    $router->getRoutes()->refreshNameLookups();
+
+    expect($this->get('/cached-skip')->getStatusCode())->toBe(200);
 });
 
-it('static facade routes through the container instance', function (): void {
-    $fresh = new MiddlewareSpecRegistry();
-    $this->app->instance(MiddlewareSpecRegistry::class, $fresh);
-
-    $spec = RequirePayment::using('0.01')->payTo('0xswap');
-    $token = explode(':', (string) $spec, 2)[1];
-
-    expect($fresh->exists($token))->toBeTrue()
-        ->and(MiddlewareSpecRegistry::resolve($token))->toBe($spec);
-});
-
-it('distinguishes two skipWhen closures defined on the same line', function (): void {
-    $a = (string) RequirePayment::using('0.01')->skipWhen(fn (): bool => true);
-    $b = (string) RequirePayment::using('0.01')->skipWhen(fn (): bool => true);
-
-    expect($a)->not->toBe($b);
-});
-
-it('reuses the same token when the same closure object is registered twice', function (): void {
-    $predicate = fn (): bool => true;
-    $a = (string) RequirePayment::using('0.01')->skipWhen($predicate);
-    $b = (string) RequirePayment::using('0.01')->skipWhen($predicate);
-
-    expect($a)->toBe($b);
-});
-
-it('onlyBots flips the botGated flag and forces token serialisation', function (): void {
+it('onlyBots flips the botGated flag and forces v2 serialisation', function (): void {
     $spec = RequirePayment::using('0.01')->onlyBots();
 
     expect($spec->botGated)->toBeTrue()
         ->and((string) $spec)
-        ->toStartWith(RequirePayment::class . ':x402-spec-');
+        ->toStartWith(RequirePayment::class . ':' . MiddlewareSpec::TOKEN_PREFIX);
 });
 
 it('botGated specs short-circuit non-bots in RequirePayment', function (): void {
@@ -208,21 +196,24 @@ it('botGated specs short-circuit non-bots in RequirePayment', function (): void 
         ->toBe(402);
 });
 
-it('does not flush the registry on the Octane RequestReceived listener', function (): void {
+it('does not flush any per-worker spec state on the Octane RequestReceived listener', function (): void {
     /*
-     * Regression for the active bug fixed in Phase 1 of the post-0.5
-     * code-quality refactor spec: the previous Octane integration called
-     * MiddlewareSpecRegistry::flush() on RequestReceived, which wiped
-     * boot-time route specs that subsequent requests still needed.
+     * Regression for the active bug fixed in the post-0.5 code-quality
+     * refactor spec: the Octane listener used to flush a per-worker spec
+     * registry on RequestReceived, wiping boot-time route specs subsequent
+     * requests still needed.
      *
-     * Octane isn't installed in tests (class_exists returns false), so the
-     * listener never installs and we assert the absence of flushing by
-     * inspecting the source of the integration method directly. Prefer this
-     * to spinning up an Octane harness for one regression test.
+     * v2 tokens removed the registry entirely, so the flush call no longer
+     * exists and never can — but we keep the guard to surface any future
+     * regression that re-introduces process-global per-worker spec state.
+     *
+     * Octane isn't installed in tests; assert via source inspection.
      */
     $file = (new ReflectionClass(X402ServiceProvider::class))->getFileName();
     expect($file)->toBeString();
 
     $source = file_get_contents((string) $file);
-    expect($source)->toBeString()->not->toContain('MiddlewareSpecRegistry::flush()');
+    expect($source)->toBeString()
+        ->not->toContain('MiddlewareSpecRegistry')
+        ->not->toContain('SpecRegistry::flush()');
 });

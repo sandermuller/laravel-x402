@@ -28,10 +28,11 @@
         "illuminate/http": "^11.0|^12.0",
         "illuminate/support": "^11.0|^12.0",
         "nyholm/psr7": "^1.8",
-        "sandermuller/php-x402": "^0.7.0",
+        "sandermuller/php-x402": "^0.8.0",
         "symfony/psr-http-message-bridge": "^7.0|^8.0"
     },
     "require-dev": {
+        "aws/aws-sdk-php": "^3.380",
         "dg/bypass-finals": "^1.9",
         "driftingly/rector-laravel": "^2.3",
         "larastan/larastan": "^3.0",
@@ -56,6 +57,9 @@
         "symplify/phpstan-extensions": "^12.0",
         "tomasvotruba/cognitive-complexity": "^1.1",
         "tomasvotruba/type-coverage": "^2.1"
+    },
+    "suggest": {
+        "aws/aws-sdk-php": "Required when X402_WALLET_DRIVER=kms and X402_WALLET_KMS_PROVIDER=aws — wires the buyer wallet to AWS KMS so the signing key never touches PHP."
     },
     "autoload": {
         "psr-4": {

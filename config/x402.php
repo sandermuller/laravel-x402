@@ -127,12 +127,28 @@ return [
     | Buyer wallet
     |--------------------------------------------------------------------------
     |
-    | Used by Http::withX402() to sign outbound payments. NEVER commit the
-    | private key — set X402_PRIVATE_KEY in your environment / KMS.
+    | Used by Http::withX402() to sign outbound payments.
+    |
+    | "driver" picks the signer:
+    |   - "private_key" — flat hex key from X402_PRIVATE_KEY (default; the
+    |     historical behaviour, no migration needed). NEVER commit the key.
+    |   - "kms" — sign at a KMS provider so the key never touches PHP.
+    |     Requires X402_WALLET_KMS_PROVIDER and the matching SDK in
+    |     composer (`composer require aws/aws-sdk-php` for AWS). Adds
+    |     50–200ms latency per outbound payment but satisfies SOC2 / FIPS
+    |     environments. See README "Wallet drivers" for the full setup.
     */
 
     'wallet' => [
+        'driver' => env('X402_WALLET_DRIVER', 'private_key'),
         'private_key' => env('X402_PRIVATE_KEY'),
+        'kms' => [
+            'provider' => env('X402_WALLET_KMS_PROVIDER'),
+            'aws' => [
+                'region' => env('X402_WALLET_AWS_REGION'),
+                'key_id' => env('X402_WALLET_AWS_KEY_ID'),
+            ],
+        ],
     ],
 
     /*

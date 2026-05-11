@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace X402\Laravel;
 
+use Aws\Kms\KmsClient;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Contracts\Cache\Factory;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
@@ -25,6 +26,7 @@ use Psr\Http\Message\StreamFactoryInterface;
 use RuntimeException;
 use Symfony\Bridge\PsrHttpMessage\Factory\HttpFoundationFactory;
 use Symfony\Bridge\PsrHttpMessage\Factory\PsrHttpFactory;
+use X402\Client\AwsKmsWallet;
 use X402\Client\PrivateKeyWallet;
 use X402\Client\Wallet;
 use X402\Facilitator\CoinbaseFacilitator;
@@ -49,7 +51,6 @@ use X402\Laravel\Facilitator\ConfiguredFacilitatorResolver;
 use X402\Laravel\Facilitator\DispatchingFacilitator;
 use X402\Laravel\Facilitator\FacilitatorResolver;
 use X402\Laravel\Http\Middleware\CachePaymentResponse;
-use X402\Laravel\Http\Middleware\MiddlewareSpecRegistry;
 use X402\Laravel\Http\Middleware\RequirePayment;
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;
 use X402\Laravel\Listeners\RecordPayment;
@@ -75,7 +76,6 @@ final class X402ServiceProvider extends ServiceProvider
 
         $this->app->singleton(EnforcementPolicy::class, fn (): EnforcementPolicy => new EnforcementPolicy());
         $this->app->singleton(PaymentContextRegistry::class, fn (): PaymentContextRegistry => new PaymentContextRegistry());
-        $this->app->singleton(MiddlewareSpecRegistry::class, fn (): MiddlewareSpecRegistry => new MiddlewareSpecRegistry());
         // Lazy singletons — built on first resolve, cached for the worker
         // lifetime. Lazy (not eager-at-boot) because tests and some
         // multi-tenant setups mutate `x402.*` config after boot and expect
@@ -257,16 +257,69 @@ final class X402ServiceProvider extends ServiceProvider
     private function registerWallet(): void
     {
         $this->app->bind(Wallet::class, function (Application $app): Wallet {
-            $key = ConfigReader::string($app->make(Repository::class), 'x402.wallet.private_key');
+            $config = $app->make(Repository::class);
+            $driver = ConfigReader::string($config, 'x402.wallet.driver', 'private_key');
 
-            if ($key === '') {
-                throw new RuntimeException('x402.wallet.private_key is not configured. Set X402_PRIVATE_KEY in your environment.');
-            }
-
-            return new PrivateKeyWallet($key);
+            return match ($driver) {
+                'private_key' => $this->resolvePrivateKeyWallet($config),
+                'kms' => $this->resolveKmsWallet($app, $config),
+                default => throw new RuntimeException(sprintf('Unknown x402 wallet driver "%s". Supported: private_key, kms.', $driver)),
+            };
         });
 
         $this->app->bind(WalletResolver::class, ConfiguredWalletResolver::class);
+    }
+
+    private function resolvePrivateKeyWallet(Repository $config): PrivateKeyWallet
+    {
+        $key = ConfigReader::string($config, 'x402.wallet.private_key');
+
+        if ($key === '') {
+            throw new RuntimeException('x402.wallet.private_key is not configured. Set X402_PRIVATE_KEY in your environment.');
+        }
+
+        return new PrivateKeyWallet($key);
+    }
+
+    private function resolveKmsWallet(Application $app, Repository $config): AwsKmsWallet
+    {
+        $provider = ConfigReader::string($config, 'x402.wallet.kms.provider');
+
+        return match ($provider) {
+            'aws' => $this->buildAwsKmsWallet($app, $config),
+            '' => throw new RuntimeException('x402.wallet.kms.provider is not configured. Set X402_WALLET_KMS_PROVIDER (supported: aws).'),
+            default => throw new RuntimeException(sprintf('Unknown x402 KMS provider "%s". Supported: aws.', $provider)),
+        };
+    }
+
+    private function buildAwsKmsWallet(Application $app, Repository $config): AwsKmsWallet
+    {
+        if (! class_exists(KmsClient::class)) {
+            throw new RuntimeException(
+                'aws/aws-sdk-php is required for the AWS KMS wallet driver. '
+                . 'Install it: composer require aws/aws-sdk-php'
+            );
+        }
+
+        $keyId = ConfigReader::string($config, 'x402.wallet.kms.aws.key_id');
+
+        if ($keyId === '') {
+            throw new RuntimeException('x402.wallet.kms.aws.key_id is not configured. Set X402_WALLET_AWS_KEY_ID.');
+        }
+
+        // Hosts can override the AWS client (custom credentials, retry
+        // policy, profile, custom endpoint) by binding their own
+        // KmsClient in the container before this provider boots; we only
+        // construct one if the container has none, using the configured
+        // region.
+        $client = $app->bound(KmsClient::class)
+            ? $app->make(KmsClient::class)
+            : new KmsClient([
+                'region' => ConfigReader::string($config, 'x402.wallet.kms.aws.region'),
+                'version' => 'latest',
+            ]);
+
+        return new AwsKmsWallet(kms: $client, keyId: $keyId);
     }
 
     public function boot(): void
@@ -366,12 +419,9 @@ final class X402ServiceProvider extends ServiceProvider
      *   - {@see PaymentContextRegistry} per-request capture/formatter
      *     overrides are reset to the boot-time defaults.
      *
-     * The {@see MiddlewareSpecRegistry} is intentionally NOT flushed here:
-     * specs are registered when `MiddlewareSpec::__toString()` runs during
-     * route resolution (which in Octane happens at boot, not per request),
-     * so a per-request flush would wipe entries the next request still
-     * needs. Request-time spec mutation is unsupported (`@internal` note on
-     * `add()`).
+     * `MiddlewareSpec` no longer needs Octane handling: its v2 token form
+     * is fully self-contained (the spec serialises into the route table)
+     * so there is no per-worker registry to snapshot.
      *
      * No-op if Octane isn't present. We listen via the framework Dispatcher
      * by FQCN so we don't need to require Octane as a dev dependency.

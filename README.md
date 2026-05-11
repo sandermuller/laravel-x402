@@ -90,12 +90,10 @@ Available overrides:
 > [!NOTE]
 > The spec is immutable; fluent setters return a new instance. Chain the
 > calls or assign the result. Mutating an aliased reference does nothing.
-
-> [!WARNING]
-> When any override is set, the spec serialises to a registry token. The
-> token form does **not** survive `route:cache`, so either cache the routes
-> after the route file evaluates, or keep cached routes on the legacy
-> `amount,asset,network` form.
+>
+> Specs survive `route:cache` since 0.8.0 — closures inside `->skipWhen()`
+> ride along via `laravel/serializable-closure`, so cached routes
+> reconstruct the spec from the middleware string alone.
 
 ### Variable price per resource
 
@@ -252,6 +250,73 @@ Http::withX402(context: $tenantId)->post('https://api.example.com/...');
 The `$context` is forwarded onto every `OutboundPaymentSent` event so
 listeners can attribute spend back to a tenant, job, or correlation id
 without parsing the URL.
+
+### Wallet drivers
+
+The buyer wallet used by `Http::withX402()` is selected by
+`x402.wallet.driver`. Two drivers ship in 0.8.0:
+
+| Driver        | Setup                                                                     | When to use                                                  |
+|---------------|---------------------------------------------------------------------------|--------------------------------------------------------------|
+| `private_key` | `X402_PRIVATE_KEY=0x…` (default — no `driver` env needed)                 | Local dev, single-key servers, low-stakes production         |
+| `kms`         | `X402_WALLET_DRIVER=kms`, `X402_WALLET_KMS_PROVIDER=aws`, plus AWS config | SOC2 / FIPS environments where the key never touches the app |
+
+The `kms` driver requires an extra Composer package — the package's
+`composer.json` only `suggest`s the SDK so adopters who do not need it
+do not pull a 200-package dependency tree:
+
+```bash
+composer require aws/aws-sdk-php
+```
+
+```php
+// .env (AWS KMS)
+X402_WALLET_DRIVER=kms
+X402_WALLET_KMS_PROVIDER=aws
+X402_WALLET_AWS_REGION=us-east-1
+X402_WALLET_AWS_KEY_ID=arn:aws:kms:us-east-1:123:key/abc...
+```
+
+The KMS key MUST be `ECC_SECG_P256K1` with usage `SIGN_VERIFY`. Anything
+else fails the first time `address()` runs.
+
+`x402:verify-config` reports the active driver and the resolved address
+so misconfiguration surfaces at boot, not at first paid call.
+
+```text
+$ php artisan x402:verify-config
+Wallet driver: kms (aws)
+Wallet address: 0xabc…
+x402 config OK.
+```
+
+KMS adds 50–200ms per outbound payment. The Laravel HTTP client's
+`pool()` parallelises across requests; per-request the latency is
+unavoidable.
+
+#### Per-tenant KMS
+
+Tenants that each sign with a distinct KMS key bind
+`TenantKmsWalletResolver` (a reference implementation; copy and adapt
+when your tenant lookup differs):
+
+```php
+use Aws\Kms\KmsClient;
+use X402\Laravel\Client\WalletResolver;
+use X402\Laravel\Wallet\Resolvers\TenantKmsWalletResolver;
+
+$this->app->bind(WalletResolver::class, fn ($app) => new TenantKmsWalletResolver(
+    kms: $app->make(KmsClient::class),
+    keyIdByTenant: [
+        'acme'   => 'arn:aws:kms:us-east-1:123:key/acme...',
+        'globex' => 'arn:aws:kms:us-east-1:123:key/globex...',
+    ],
+));
+```
+
+The default tenant extraction reads `Request::user()->tenant_id`. Pass
+a `tenantIdResolver:` closure to the constructor when your dispatch
+key lives elsewhere (job context, header, subdomain).
 
 ### Multi-tenant facilitator
 
@@ -587,7 +652,11 @@ The most-set keys (see `config/x402.php` for the full reference):
 | `asset.address` | `X402_ASSET_ADDRESS` | USDC on Base |
 | `assets` | _(array)_ | Symbol → `{address, decimals, eip712}` map. Resolved when `RequirePayment::using('0.01', 'PYUSD')` picks a non-default asset. |
 | `facilitator.url` | `X402_FACILITATOR_URL` | `https://x402.org/facilitator` |
-| `wallet.private_key` | `X402_PRIVATE_KEY` | — |
+| `wallet.driver` | `X402_WALLET_DRIVER` | `private_key` (also `kms`; see Wallet drivers recipe) |
+| `wallet.private_key` | `X402_PRIVATE_KEY` | — (required when `driver=private_key`) |
+| `wallet.kms.provider` | `X402_WALLET_KMS_PROVIDER` | — (`aws`; required when `driver=kms`) |
+| `wallet.kms.aws.region` | `X402_WALLET_AWS_REGION` | — |
+| `wallet.kms.aws.key_id` | `X402_WALLET_AWS_KEY_ID` | — |
 | `replay.cache_store` | `X402_REPLAY_CACHE` | default cache store |
 | `response_cache.cache_store` | `X402_RESPONSE_CACHE_STORE` | default cache store (used by the `x402.cache` middleware) |
 | `response_cache.ttl` | `X402_RESPONSE_CACHE_TTL` | `3600` (seconds) |

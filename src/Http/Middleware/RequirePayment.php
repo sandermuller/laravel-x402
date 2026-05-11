@@ -111,8 +111,8 @@ final readonly class RequirePayment
             $networkSlug = ConfigReader::string($this->config, 'x402.network', 'eip155:8453');
         }
 
-        if (str_starts_with($amount, 'x402-spec-')) {
-            $spec = MiddlewareSpecRegistry::resolve($amount);
+        if (str_starts_with($amount, MiddlewareSpec::TOKEN_PREFIX)) {
+            $spec = MiddlewareSpec::decode($amount, self::class);
 
             $amount = $spec->amount;
             $asset = $spec->asset;

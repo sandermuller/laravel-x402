@@ -28,7 +28,6 @@ internal
 phpstan-baseline.neon
 phpstan.neon.dist
 phpunit.xml
-phpunit.xml.dist
 pint.json
 rector.php
 testbench.yaml

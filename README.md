@@ -2,8 +2,10 @@
 
 HTTP 402 stablecoin payments for Laravel routes.
 
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/sandermuller/laravel-x402.svg?style=flat-square)](https://packagist.org/packages/sandermuller/laravel-x402)
 [![Tests](https://github.com/sandermuller/laravel-x402/actions/workflows/run-tests.yml/badge.svg)](https://github.com/sandermuller/laravel-x402/actions/workflows/run-tests.yml)
-[![License](https://img.shields.io/github/license/sandermuller/laravel-x402.svg)](LICENSE)
+[![Total Downloads](https://img.shields.io/packagist/dt/sandermuller/laravel-x402.svg?style=flat-square)](https://packagist.org/packages/sandermuller/laravel-x402)
+[![License](https://img.shields.io/packagist/l/sandermuller/laravel-x402.svg?style=flat-square)](LICENSE)
 
 ```php
 use X402\Laravel\Http\Middleware\RequirePaymentFromBots;

@@ -70,7 +70,7 @@ jobs:
         run: composer show -D
 
       - name: Cache PHPUnit results
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: laravel-x402/.phpunit.cache/
           key: phpunit-cache-${{ matrix.php }}-${{ matrix.laravel }}-${{ matrix.stability }}-${{ hashFiles('laravel-x402/tests/**') }}

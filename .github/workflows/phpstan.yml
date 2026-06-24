@@ -47,7 +47,7 @@ jobs:
           working-directory: laravel-x402
 
       - name: Cache PHPStan results
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: laravel-x402/.cache/phpstan/
           key: phpstan-result-cache-${{ hashFiles('laravel-x402/composer.lock', 'laravel-x402/phpstan.neon.dist') }}
